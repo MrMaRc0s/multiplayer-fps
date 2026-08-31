@@ -1,27 +1,36 @@
-use maze_wars::protocol::{
-    ClientMessage, MAX_PACKET_SIZE, MAX_USERNAME_BYTES, ServerMessage, decode_server, encode_client,
+use crate::protocol::{
+    ClientMessage, MAX_PACKET_SIZE, ServerMessage, decode_server, encode_client,
 };
-use std::io::{self, Write};
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::process::ExitCode;
+use std::io;
+use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
-const DEFAULT_SERVER_ADDRESS: &str = "127.0.0.1:34254";
+pub const DEFAULT_SERVER_ADDRESS: &str = "127.0.0.1:34254";
 const CONNECTION_ATTEMPTS: usize = 3;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
 
-fn main() -> ExitCode {
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("Could not start Maze Wars: {error}");
-            ExitCode::FAILURE
-        }
+#[derive(Debug)]
+pub struct Connection {
+    socket: UdpSocket,
+    player_id: u32,
+    level: u8,
+}
+
+impl Connection {
+    pub fn socket(&self) -> &UdpSocket {
+        &self.socket
+    }
+
+    pub fn player_id(&self) -> u32 {
+        self.player_id
+    }
+
+    pub fn level(&self) -> u8 {
+        self.level
     }
 }
 
-fn run() -> Result<(), String> {
-    let server = ask_for_server()?;
+pub fn connect(server: SocketAddr, username: &str) -> Result<Connection, String> {
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|error| format!("could not open a UDP socket: {error}"))?;
     socket
@@ -31,59 +40,6 @@ fn run() -> Result<(), String> {
         .set_read_timeout(Some(RESPONSE_TIMEOUT))
         .map_err(|error| format!("could not configure the UDP socket: {error}"))?;
 
-    println!("Using UDP connection to {server}");
-    let username = ask_for_username()?;
-    println!("Starting...");
-
-    let (player_id, level) = join_server(&socket, server, &username)?;
-    println!("Connected as player {player_id} on level {level}");
-    Ok(())
-}
-
-fn ask_for_server() -> Result<SocketAddr, String> {
-    let input = prompt(&format!("Enter IP Address [{DEFAULT_SERVER_ADDRESS}]: "))?;
-    let address = if input.is_empty() {
-        DEFAULT_SERVER_ADDRESS
-    } else {
-        input.as_str()
-    };
-
-    address
-        .to_socket_addrs()
-        .map_err(|error| format!("invalid server address '{address}': {error}"))?
-        .next()
-        .ok_or_else(|| format!("server address '{address}' did not resolve"))
-}
-
-fn ask_for_username() -> Result<String, String> {
-    loop {
-        let username = prompt("Enter Name: ")?;
-        if !username.is_empty() && username.len() <= MAX_USERNAME_BYTES {
-            return Ok(username);
-        }
-
-        println!("Name must contain 1 to {MAX_USERNAME_BYTES} bytes.");
-    }
-}
-
-fn prompt(label: &str) -> Result<String, String> {
-    print!("{label}");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("could not write to the terminal: {error}"))?;
-
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .map_err(|error| format!("could not read from the terminal: {error}"))?;
-    Ok(input.trim().to_owned())
-}
-
-fn join_server(
-    socket: &UdpSocket,
-    server: SocketAddr,
-    username: &str,
-) -> Result<(u32, u8), String> {
     let join_packet = encode_client(&ClientMessage::Join {
         username: username.to_owned(),
     })
@@ -102,7 +58,11 @@ fn join_server(
                 let response = decode_server(&buffer[..length])
                     .map_err(|error| format!("server sent an invalid response: {error}"))?;
                 return match response {
-                    ServerMessage::Accepted { player_id, level } => Ok((player_id, level)),
+                    ServerMessage::Accepted { player_id, level } => Ok(Connection {
+                        socket,
+                        player_id,
+                        level,
+                    }),
                     ServerMessage::Rejected { reason } => {
                         Err(format!("server rejected the connection: {reason}"))
                     }

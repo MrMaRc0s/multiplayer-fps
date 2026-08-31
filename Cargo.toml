@@ -6,7 +6,7 @@ default-run = "client"
 
 [[bin]]
 name = "client"
-path = "src/main.rs"
+path = "src/bin/client.rs"
 
 [[bin]]
 name = "server"
