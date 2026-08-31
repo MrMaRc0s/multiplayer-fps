@@ -11,7 +11,8 @@ mod state;
 
 pub const SERVER_ADDRESS: &str = "0.0.0.0:34254";
 pub const MAX_PLAYERS: usize = 64;
-const TICK_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
+const TICKS_PER_SECOND: u32 = 60;
+const TICK_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / TICKS_PER_SECOND as u64);
 
 pub fn run() -> io::Result<()> {
     let socket = UdpSocket::bind(SERVER_ADDRESS)?;
@@ -38,6 +39,9 @@ pub fn run() -> io::Result<()> {
         let elapsed = now.duration_since(last_tick);
         if elapsed >= TICK_INTERVAL {
             state.update(elapsed.as_secs_f32());
+            for username in state.remove_inactive_players() {
+                println!("{username} left after timing out");
+            }
             broadcast_snapshot(&socket, &state)?;
             last_tick = now;
         }
