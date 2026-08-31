@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 default-run = "client"
 
+[dependencies]
+sdl2 = "0.38.0"
+
 [[bin]]
 name = "client"
 path = "src/bin/client.rs"

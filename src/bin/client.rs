@@ -1,5 +1,6 @@
 use maze_wars::client::{DEFAULT_SERVER_ADDRESS, connect};
 use maze_wars::protocol::MAX_USERNAME_BYTES;
+use maze_wars::window;
 use std::io::{self, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::ExitCode;
@@ -26,7 +27,7 @@ fn run() -> Result<(), String> {
         connection.player_id(),
         connection.level()
     );
-    Ok(())
+    window::run(&username, connection.player_id(), connection.level())
 }
 
 fn ask_for_server() -> Result<SocketAddr, String> {
