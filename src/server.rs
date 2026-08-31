@@ -1,115 +1,99 @@
+use self::state::ServerState;
 use crate::protocol::{
     ClientMessage, MAX_PACKET_SIZE, ServerMessage, decode_client, encode_server,
 };
-use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
+use std::thread;
+use std::time::{Duration, Instant};
+
+mod state;
 
 pub const SERVER_ADDRESS: &str = "0.0.0.0:34254";
 pub const MAX_PLAYERS: usize = 64;
-
-#[derive(Debug)]
-struct Player {
-    id: u32,
-    username: String,
-}
-
-#[derive(Debug)]
-struct ServerState {
-    players: HashMap<SocketAddr, Player>,
-    next_player_id: u32,
-}
-
-impl ServerState {
-    fn new() -> Self {
-        Self {
-            players: HashMap::new(),
-            next_player_id: 1,
-        }
-    }
-
-    fn join(&mut self, address: SocketAddr, username: String) -> ServerMessage {
-        if let Some(player) = self.players.get(&address) {
-            return ServerMessage::Accepted {
-                player_id: player.id,
-                level: 1,
-            };
-        }
-
-        let username = username.trim();
-        let rejection = if username.is_empty() {
-            Some("Username cannot be empty")
-        } else if self.players.len() >= MAX_PLAYERS {
-            Some("Server is full")
-        } else if self
-            .players
-            .values()
-            .any(|player| player.username == username)
-        {
-            Some("Username is already in use")
-        } else {
-            None
-        };
-
-        if let Some(reason) = rejection {
-            return ServerMessage::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-
-        let player_id = self.next_player_id;
-        self.next_player_id = self.next_player_id.wrapping_add(1).max(1);
-        self.players.insert(
-            address,
-            Player {
-                id: player_id,
-                username: username.to_owned(),
-            },
-        );
-
-        ServerMessage::Accepted {
-            player_id,
-            level: 1,
-        }
-    }
-}
+const TICK_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
 pub fn run() -> io::Result<()> {
     let socket = UdpSocket::bind(SERVER_ADDRESS)?;
+    socket.set_nonblocking(true)?;
     let mut state = ServerState::new();
     let mut buffer = [0_u8; MAX_PACKET_SIZE];
+    let mut last_tick = Instant::now();
 
     println!("Maze Wars server listening on {SERVER_ADDRESS}");
     println!("Waiting for players (capacity: {MAX_PLAYERS})...");
 
     loop {
-        let (length, source) = socket.recv_from(&mut buffer)?;
-        let message = match decode_client(&buffer[..length]) {
-            Ok(message) => message,
-            Err(error) => {
-                eprintln!("Ignored invalid packet from {source}: {error}");
-                continue;
-            }
-        };
-
-        match message {
-            ClientMessage::Join { username } => {
-                let previous_player_count = state.players.len();
-                let response = state.join(source, username);
-
-                if state.players.len() > previous_player_count {
-                    let player = &state.players[&source];
-                    println!(
-                        "{} joined from {source} as player {}",
-                        player.username, player.id
-                    );
+        loop {
+            match socket.recv_from(&mut buffer) {
+                Ok((length, source)) => {
+                    handle_packet(&socket, &mut state, source, &buffer[..length])?;
                 }
-
-                send_response(&socket, source, &response)?;
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error),
             }
-            ClientMessage::Input { .. } => {}
+        }
+
+        let now = Instant::now();
+        let elapsed = now.duration_since(last_tick);
+        if elapsed >= TICK_INTERVAL {
+            state.update(elapsed.as_secs_f32());
+            broadcast_snapshot(&socket, &state)?;
+            last_tick = now;
+        }
+
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn handle_packet(
+    socket: &UdpSocket,
+    state: &mut ServerState,
+    source: SocketAddr,
+    packet: &[u8],
+) -> io::Result<()> {
+    let message = match decode_client(packet) {
+        Ok(message) => message,
+        Err(error) => {
+            eprintln!("Ignored invalid packet from {source}: {error}");
+            return Ok(());
+        }
+    };
+
+    match message {
+        ClientMessage::Join { username } => {
+            let previous_player_count = state.player_count();
+            let response = state.join(source, username);
+
+            if state.player_count() > previous_player_count
+                && let Some((username, player_id)) = state.player_identity(source)
+            {
+                println!("{username} joined from {source} as player {player_id}");
+            }
+
+            send_response(socket, source, &response)?;
+        }
+        ClientMessage::Input {
+            player_id,
+            sequence,
+            forward,
+            turn,
+        } => {
+            state.apply_input(source, player_id, sequence, forward, turn);
         }
     }
+
+    Ok(())
+}
+
+fn broadcast_snapshot(socket: &UdpSocket, state: &ServerState) -> io::Result<()> {
+    let packet = encode_server(&state.snapshot()).map_err(io::Error::other)?;
+    for address in state.player_addresses() {
+        if let Err(error) = socket.send_to(&packet, address) {
+            eprintln!("Could not send snapshot to {address}: {error}");
+        }
+    }
+    Ok(())
 }
 
 fn send_response(
@@ -120,74 +104,4 @@ fn send_response(
     let packet = encode_server(message).map_err(io::Error::other)?;
     socket.send_to(&packet, destination)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn address(port: u16) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], port))
-    }
-
-    #[test]
-    fn joins_a_new_player() {
-        let mut state = ServerState::new();
-
-        let response = state.join(address(4000), "chris".to_owned());
-
-        assert_eq!(
-            response,
-            ServerMessage::Accepted {
-                player_id: 1,
-                level: 1
-            }
-        );
-        assert_eq!(state.players.len(), 1);
-    }
-
-    #[test]
-    fn repeated_join_keeps_the_same_id() {
-        let mut state = ServerState::new();
-        let player_address = address(4000);
-        let first = state.join(player_address, "chris".to_owned());
-
-        let repeated = state.join(player_address, "chris".to_owned());
-
-        assert_eq!(repeated, first);
-        assert_eq!(state.players.len(), 1);
-    }
-
-    #[test]
-    fn duplicate_username_is_rejected() {
-        let mut state = ServerState::new();
-        state.join(address(4000), "chris".to_owned());
-
-        let response = state.join(address(4001), "chris".to_owned());
-
-        assert_eq!(
-            response,
-            ServerMessage::Rejected {
-                reason: "Username is already in use".to_owned()
-            }
-        );
-    }
-
-    #[test]
-    fn full_server_rejects_the_next_player() {
-        let mut state = ServerState::new();
-        for index in 0..MAX_PLAYERS {
-            let response = state.join(address(4000 + index as u16), format!("player-{index}"));
-            assert!(matches!(response, ServerMessage::Accepted { .. }));
-        }
-
-        let response = state.join(address(5000), "one-too-many".to_owned());
-
-        assert_eq!(
-            response,
-            ServerMessage::Rejected {
-                reason: "Server is full".to_owned()
-            }
-        );
-    }
 }
