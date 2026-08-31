@@ -2,10 +2,10 @@ use crate::client::{Connection, WorldSnapshot};
 use crate::world::Maze;
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Scancode};
-use sdl2::pixels::Color;
 use std::time::{Duration, Instant};
 
 mod minimap;
+mod view;
 
 const WINDOW_WIDTH: u32 = 960;
 const WINDOW_HEIGHT: u32 = 600;
@@ -76,11 +76,13 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
             latest_snapshot = Some(snapshot);
         }
 
-        canvas.set_draw_color(Color::RGB(7, 12, 18));
-        canvas.clear();
         let players = latest_snapshot
             .as_ref()
             .map_or(&[][..], |snapshot| snapshot.players.as_slice());
+        let own_player = players
+            .iter()
+            .find(|player| player.id == connection.player_id());
+        view::draw(&mut canvas, &maze, own_player)?;
         minimap::draw(&mut canvas, &maze, connection.player_id(), players)?;
         canvas.present();
     }
