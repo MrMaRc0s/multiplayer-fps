@@ -66,6 +66,7 @@ pub fn connect(server: SocketAddr, username: &str) -> Result<Connection, String>
                     ServerMessage::Rejected { reason } => {
                         Err(format!("server rejected the connection: {reason}"))
                     }
+                    ServerMessage::Snapshot { .. } => continue,
                 };
             }
             Err(error)

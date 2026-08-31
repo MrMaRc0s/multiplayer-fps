@@ -107,6 +107,7 @@ pub fn run() -> io::Result<()> {
 
                 send_response(&socket, source, &response)?;
             }
+            ClientMessage::Input { .. } => {}
         }
     }
 }
