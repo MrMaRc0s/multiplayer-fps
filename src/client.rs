@@ -1,5 +1,5 @@
 use crate::protocol::{
-    ClientMessage, MAX_PACKET_SIZE, ServerMessage, decode_server, encode_client,
+    ClientMessage, MAX_PACKET_SIZE, PlayerSnapshot, ServerMessage, decode_server, encode_client,
 };
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -14,19 +14,76 @@ pub struct Connection {
     socket: UdpSocket,
     player_id: u32,
     level: u8,
+    last_snapshot_tick: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldSnapshot {
+    pub tick: u32,
+    pub level: u8,
+    pub players: Vec<PlayerSnapshot>,
 }
 
 impl Connection {
-    pub fn socket(&self) -> &UdpSocket {
-        &self.socket
-    }
-
     pub fn player_id(&self) -> u32 {
         self.player_id
     }
 
     pub fn level(&self) -> u8 {
         self.level
+    }
+
+    pub fn send_input(&self, sequence: u32, forward: i8, turn: i8) -> Result<(), String> {
+        let packet = encode_client(&ClientMessage::Input {
+            player_id: self.player_id,
+            sequence,
+            forward,
+            turn,
+        })
+        .map_err(|error| format!("could not prepare movement input: {error}"))?;
+
+        self.socket
+            .send(&packet)
+            .map_err(|error| format!("could not send movement input: {error}"))?;
+        Ok(())
+    }
+
+    pub fn receive_latest_snapshot(&mut self) -> Result<Option<WorldSnapshot>, String> {
+        let mut buffer = [0_u8; MAX_PACKET_SIZE];
+        let mut latest = None;
+
+        loop {
+            match self.socket.recv(&mut buffer) {
+                Ok(length) => match decode_server(&buffer[..length])
+                    .map_err(|error| format!("server sent an invalid response: {error}"))?
+                {
+                    ServerMessage::Snapshot {
+                        tick,
+                        level,
+                        players,
+                    } if self
+                        .last_snapshot_tick
+                        .is_none_or(|previous| is_newer_sequence(tick, previous)) =>
+                    {
+                        self.last_snapshot_tick = Some(tick);
+                        self.level = level;
+                        latest = Some(WorldSnapshot {
+                            tick,
+                            level,
+                            players,
+                        });
+                    }
+                    ServerMessage::Rejected { reason } => {
+                        return Err(format!("server ended the connection: {reason}"));
+                    }
+                    ServerMessage::Accepted { .. } | ServerMessage::Snapshot { .. } => {}
+                },
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(format!("could not receive world state: {error}")),
+            }
+        }
+
+        Ok(latest)
     }
 }
 
@@ -58,11 +115,17 @@ pub fn connect(server: SocketAddr, username: &str) -> Result<Connection, String>
                 let response = decode_server(&buffer[..length])
                     .map_err(|error| format!("server sent an invalid response: {error}"))?;
                 return match response {
-                    ServerMessage::Accepted { player_id, level } => Ok(Connection {
-                        socket,
-                        player_id,
-                        level,
-                    }),
+                    ServerMessage::Accepted { player_id, level } => {
+                        socket.set_nonblocking(true).map_err(|error| {
+                            format!("could not configure the UDP socket: {error}")
+                        })?;
+                        Ok(Connection {
+                            socket,
+                            player_id,
+                            level,
+                            last_snapshot_tick: None,
+                        })
+                    }
                     ServerMessage::Rejected { reason } => {
                         Err(format!("server rejected the connection: {reason}"))
                     }
@@ -90,4 +153,26 @@ pub fn connect(server: SocketAddr, username: &str) -> Result<Connection, String>
     Err(format!(
         "server {server} is not running or reachable; start it first with `cargo run --bin server`"
     ))
+}
+
+fn is_newer_sequence(candidate: u32, previous: u32) -> bool {
+    let difference = candidate.wrapping_sub(previous);
+    difference != 0 && difference < u32::MAX / 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_sequence_must_move_forward() {
+        assert!(is_newer_sequence(11, 10));
+        assert!(!is_newer_sequence(10, 10));
+        assert!(!is_newer_sequence(9, 10));
+    }
+
+    #[test]
+    fn snapshot_sequence_can_wrap_to_zero() {
+        assert!(is_newer_sequence(0, u32::MAX));
+    }
 }

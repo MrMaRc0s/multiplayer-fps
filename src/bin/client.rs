@@ -27,7 +27,7 @@ fn run() -> Result<(), String> {
         connection.player_id(),
         connection.level()
     );
-    window::run(&username, connection.player_id(), connection.level())
+    window::run(&username, connection)
 }
 
 fn ask_for_server() -> Result<SocketAddr, String> {
