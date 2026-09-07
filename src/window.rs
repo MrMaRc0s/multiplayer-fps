@@ -82,7 +82,7 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
         let own_player = players
             .iter()
             .find(|player| player.id == connection.player_id());
-        view::draw(&mut canvas, &maze, own_player)?;
+        view::draw(&mut canvas, &maze, own_player, players)?;
         minimap::draw(&mut canvas, &maze, connection.player_id(), players)?;
         canvas.present();
     }
