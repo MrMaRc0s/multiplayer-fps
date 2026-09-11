@@ -16,6 +16,7 @@ pub struct Connection {
     player_id: u32,
     level: u8,
     last_snapshot_tick: Option<u32>,
+    last_combat_event_sequence: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,36 +76,47 @@ impl Connection {
 
         loop {
             match self.socket.recv(&mut buffer) {
-                Ok(length) => match decode_server(&buffer[..length])
-                    .map_err(|error| format!("server sent an invalid response: {error}"))?
-                {
-                    ServerMessage::Snapshot {
-                        tick,
-                        level,
-                        players,
-                    } if self
-                        .last_snapshot_tick
-                        .is_none_or(|previous| is_newer_sequence(tick, previous)) =>
-                    {
-                        self.last_snapshot_tick = Some(tick);
-                        self.level = level;
-                        updates.snapshot = Some(WorldSnapshot {
+                Ok(length) => {
+                    let message = match decode_server(&buffer[..length]) {
+                        Ok(msg) => msg,
+                        Err(_) => continue,
+                    };
+
+                    match message {
+                        ServerMessage::Snapshot {
                             tick,
                             level,
                             players,
-                        });
+                        } if self
+                            .last_snapshot_tick
+                            .is_none_or(|previous| is_newer_sequence(tick, previous)) =>
+                        {
+                            self.last_snapshot_tick = Some(tick);
+                            self.level = level;
+                            updates.snapshot = Some(WorldSnapshot {
+                                tick,
+                                level,
+                                players,
+                            });
+                        }
+                        ServerMessage::CombatEvent { sequence, kind } => {
+                            if self
+                                .last_combat_event_sequence
+                                .is_none_or(|previous| is_newer_sequence(sequence, previous))
+                            {
+                                self.last_combat_event_sequence = Some(sequence);
+                                updates.combat_events.push(kind);
+                            }
+                        }
+                        ServerMessage::Roster { players } => {
+                            updates.roster = Some(players);
+                        }
+                        ServerMessage::Rejected { reason } => {
+                            return Err(format!("server ended the connection: {reason}"));
+                        }
+                        ServerMessage::Accepted { .. } | ServerMessage::Snapshot { .. } => {}
                     }
-                    ServerMessage::CombatEvent { kind, .. } => {
-                        updates.combat_events.push(kind);
-                    }
-                    ServerMessage::Roster { players } => {
-                        updates.roster = Some(players);
-                    }
-                    ServerMessage::Rejected { reason } => {
-                        return Err(format!("server ended the connection: {reason}"));
-                    }
-                    ServerMessage::Accepted { .. } | ServerMessage::Snapshot { .. } => {}
-                },
+                }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) => return Err(format!("could not receive world state: {error}")),
             }
@@ -184,6 +196,7 @@ pub fn connect(server: SocketAddr, username: &str) -> Result<Connection, String>
                             player_id,
                             level,
                             last_snapshot_tick: None,
+                            last_combat_event_sequence: None,
                         })
                     }
                     ServerMessage::Rejected { reason } => {

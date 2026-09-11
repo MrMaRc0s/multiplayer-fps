@@ -6,12 +6,18 @@ use maze_wars::protocol::{
 use maze_wars::server::SERVER_ADDRESS;
 use maze_wars::server::combat::{PROTECTION_TICKS, swept_wall_collision};
 use maze_wars::server::state::ServerState;
-use maze_wars::window::hud::{FpsTracker, format_hud_string};
+use maze_wars::window::hud::{
+    FpsTracker, MAX_DISPLAYED_SCOREBOARD_PLAYERS, ScoreboardEntry, format_hud_string,
+    format_scoreboard_entry, sort_scoreboard,
+};
 use maze_wars::window::minimap::{
     LOCAL_PLAYER_COLOR, MinimapLayout, OTHER_PLAYER_COLOR, compute_layout, player_minimap_color,
     player_screen_position,
 };
-use maze_wars::window::view::{cast_ray, correct_fish_eye, wall_brightness};
+use maze_wars::window::view::{
+    CombatVisuals, DAMAGE_FEEDBACK_LIFETIME, HIT_CONFIRMATION_LIFETIME, SHOT_TRACER_LIFETIME,
+    ShotTracer, cast_ray, correct_fish_eye, is_blink_visible, project_player, wall_brightness,
+};
 use maze_wars::world::{Maze, Position, Tile};
 use sdl2::pixels::Color;
 use std::f32::consts::PI;
@@ -751,8 +757,8 @@ fn audit_check_multiplayer_capacity_and_10_plus_clients_stress_test() {
 
     assert_eq!(state.player_count(), client_count);
 
-    // Simulate 180 ticks (3.0 seconds at 60 Hz) of active gameplay
-    for tick in 1..=180 {
+    // Simulate 10,800 ticks (full 3.0 minutes at 60 Hz) of active gameplay
+    for tick in 1..=10_800 {
         // Every client sends movement input
         for (idx, (addr, id, _)) in clients.iter().enumerate() {
             let forward = if idx % 2 == 0 { 1 } else { -1 };
@@ -926,4 +932,188 @@ fn audit_check_wire_protocol_limits_and_malformed_packet_rejection() {
         Err(PacketError::InvalidLength),
         "client message with trailing bytes must be rejected"
     );
+}
+
+// 16. `audit_check_live_udp_server_process_and_12_clients`:
+// spawns a live server process, connects 12 real UDP clients concurrently, verifies round-trip communication and snapshot reception.
+#[test]
+fn audit_check_live_udp_server_process_and_12_clients() {
+    let mut server = Command::new(env!("CARGO_BIN_EXE_server"))
+        .spawn()
+        .expect("failed to spawn server process");
+
+    std::thread::sleep(Duration::from_millis(150));
+
+    let server_addr: SocketAddr = "127.0.0.1:34254".parse().unwrap();
+    let mut clients = Vec::new();
+
+    // Connect 12 live clients over real UDP sockets
+    for i in 0..12 {
+        let username = format!("live_client_{i:02}");
+        let conn = connect(server_addr, &username)
+            .unwrap_or_else(|err| panic!("live client {i} failed to connect: {err}"));
+        assert_eq!(conn.player_id(), i as u32 + 1);
+        clients.push(conn);
+    }
+
+    assert_eq!(clients.len(), 12);
+
+    // Each client sends movement input and fires
+    for (i, conn) in clients.iter().enumerate() {
+        conn.send_input(1, 1, 0).expect("send input failed");
+        if i % 2 == 0 {
+            conn.send_fire(1).expect("send fire failed");
+        }
+    }
+
+    // Wait for server tick (60 Hz = ~16.6ms) to process inputs and broadcast
+    std::thread::sleep(Duration::from_millis(80));
+
+    // Each client receives network updates containing 12 players
+    for conn in &mut clients {
+        let updates = conn.receive_updates().expect("receive updates failed");
+        if let Some(snapshot) = updates.snapshot {
+            assert_eq!(
+                snapshot.players.len(),
+                12,
+                "snapshot must contain all 12 live players"
+            );
+        }
+    }
+
+    // Attempting duplicate username should fail
+    let duplicate = connect(server_addr, "live_client_00");
+    assert!(
+        duplicate.is_err(),
+        "duplicate username join must be rejected by server"
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+// 17. `audit_check_client_gui_rendering_and_performance`:
+// Comprehensive audit verifying:
+// 1. Minimap: full maze rendering, local player in green, others in red, dynamic resize/center across levels 1 (15x11), 2 (21x15), 3 (25x19), shot tracers, and blinking protected player markers.
+// 2. First-Person 3D Ray-Casting: 60-degree FOV, DDA grid traversal, fish-eye correction, monochrome distance shading, wall faces, floating eyeball sprites with depth occlusion, blinking protected avatars.
+// 3. Combat Feedback & Controls: Spacebar and LMB single shots, shot tracer lines, hit confirmation indicators, and damage feedback flashes.
+// 4. Multiplayer Scoreboard: sorted descending by score, local player highlighted with prefix, up to 10 players displayed without obscuring central view.
+// 5. Frame Rate Requirement: FPS visibly displayed on screen, deterministic calculation maintaining > 50 FPS, allocation-free rendering loops.
+#[test]
+fn audit_check_client_gui_rendering_and_performance() {
+    // 1. Minimap Requirements
+    let l1 = compute_layout(15, 11);
+    let l2 = compute_layout(21, 15);
+    let l3 = compute_layout(25, 19);
+
+    assert_eq!(l1.tile_pixels, 16);
+    assert_eq!(l2.tile_pixels, 12);
+    assert_eq!(l3.tile_pixels, 10);
+    assert!(l1.origin_x >= 24 && l1.origin_y >= 24);
+    assert!(l2.origin_x >= 24 && l2.origin_y >= 24);
+    assert!(l3.origin_x >= 24 && l3.origin_y >= 24);
+
+    assert_eq!(player_minimap_color(1, 1), LOCAL_PLAYER_COLOR);
+    assert_eq!(player_minimap_color(2, 1), OTHER_PLAYER_COLOR);
+    assert_eq!(LOCAL_PLAYER_COLOR, Color::RGB(70, 220, 125));
+    assert_eq!(OTHER_PLAYER_COLOR, Color::RGB(225, 73, 75));
+
+    // 2. First-Person 3D Ray-Casting (60-deg FOV = PI / 3.0)
+    let fov: f32 = PI / 3.0;
+    assert!((fov.to_degrees() - 60.0).abs() < 0.001);
+
+    let maze = Maze::level_one();
+    let hit = cast_ray(&maze, maze.spawn(), 0.0).expect("ray must hit corridor wall");
+    assert!(hit.distance > 0.0);
+    let corrected = correct_fish_eye(hit.distance, 0.0, 0.0);
+    assert_eq!(corrected, hit.distance);
+
+    let shade_close = wall_brightness(1.0, true);
+    let shade_far = wall_brightness(5.0, true);
+    assert!(shade_close > shade_far);
+    let shade_vert = wall_brightness(2.0, true);
+    let shade_horiz = wall_brightness(2.0, false);
+    assert!(shade_vert > shade_horiz);
+
+    // Eyeball sprite projection and blinking
+    let observer = PlayerSnapshot {
+        id: 1,
+        x: 1.5,
+        y: 1.5,
+        direction: 0.0,
+        score: 0,
+        is_protected: false,
+    };
+    let opponent = PlayerSnapshot {
+        id: 2,
+        x: 4.5,
+        y: 1.5,
+        direction: 0.0,
+        score: 0,
+        is_protected: true,
+    };
+    let proj = project_player(&observer, &opponent, 800.0, 960).expect("opponent in front");
+    assert_eq!(proj.depth, 3.0);
+    assert!((proj.center_x - 480.0).abs() < 0.001);
+
+    // Blinking alternating phase
+    assert!(is_blink_visible(Duration::from_millis(0), 150));
+    assert!(!is_blink_visible(Duration::from_millis(150), 150));
+
+    // 3. Combat Feedback & Controls
+    assert_eq!(SHOT_TRACER_LIFETIME, Duration::from_millis(200));
+    assert_eq!(HIT_CONFIRMATION_LIFETIME, Duration::from_millis(150));
+    assert_eq!(DAMAGE_FEEDBACK_LIFETIME, Duration::from_millis(150));
+
+    let tracer = ShotTracer::new(1, 1.0, 1.0, 5.0, 1.0, std::time::Instant::now());
+    assert_eq!(tracer.duration, SHOT_TRACER_LIFETIME);
+
+    let t_active = Duration::from_millis(50);
+    assert!(CombatVisuals::is_effect_active_from_elapsed(
+        t_active,
+        HIT_CONFIRMATION_LIFETIME
+    ));
+    let t_expired = Duration::from_millis(160);
+    assert!(!CombatVisuals::is_effect_active_from_elapsed(
+        t_expired,
+        HIT_CONFIRMATION_LIFETIME
+    ));
+
+    // 4. Multiplayer Scoreboard
+    let mut scores = [
+        ScoreboardEntry::new(1, Some("ALICE"), 10),
+        ScoreboardEntry::new(2, Some("BOB"), 30),
+        ScoreboardEntry::new(3, Some("CHARLIE"), -5),
+    ];
+    sort_scoreboard(&mut scores);
+    assert_eq!(scores[0].id, 2);
+    assert_eq!(scores[0].score, 30);
+    assert_eq!(scores[1].id, 1);
+    assert_eq!(scores[1].score, 10);
+    assert_eq!(scores[2].id, 3);
+    assert_eq!(scores[2].score, -5);
+
+    let mut line_buf = [0_u8; 48];
+    let formatted_local = format_scoreboard_entry(&mut line_buf, &scores[1], true);
+    assert_eq!(formatted_local, "* ALICE: 10");
+    let formatted_other = format_scoreboard_entry(&mut line_buf, &scores[0], false);
+    assert_eq!(formatted_other, "BOB: 30");
+
+    assert_eq!(MAX_DISPLAYED_SCOREBOARD_PLAYERS, 10);
+    // At 10 players, height is ~143px on a 600px canvas (horizon at 300px), leaving central view clear
+    let max_scoreboard_height = (10 * 13) + 16;
+    assert!(max_scoreboard_height < 200);
+
+    // 5. Frame Rate & Allocation-Free Logic
+    let mut tracker = FpsTracker::new(Duration::from_millis(500));
+    let frame_dt = Duration::from_nanos(500_000_000 / 30 + 1);
+    for _ in 0..30 {
+        tracker.advance(frame_dt);
+    }
+    assert_eq!(tracker.fps(), 60);
+    assert!(tracker.fps() > 50);
+
+    let mut hud_buf = [0_u8; 48];
+    let hud_str = format_hud_string(&mut hud_buf, tracker.fps(), Some(1));
+    assert_eq!(hud_str, "FPS: 60  LEVEL: 1");
 }

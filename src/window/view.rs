@@ -170,7 +170,11 @@ pub fn draw_with_effects(
         y: player.y,
     };
     let projection_distance = width as f32 / (2.0 * (FIELD_OF_VIEW / 2.0).tan());
-    let mut wall_depth = vec![f32::INFINITY; width as usize];
+    const MAX_WALL_DEPTH_SLICES: usize = 3840;
+    let mut wall_depth_storage = [f32::INFINITY; MAX_WALL_DEPTH_SLICES];
+    let wall_depth_len = (width as usize).min(MAX_WALL_DEPTH_SLICES);
+    let wall_depth = &mut wall_depth_storage[..wall_depth_len];
+    wall_depth.fill(f32::INFINITY);
 
     for column in (0..width).step_by(COLUMN_WIDTH) {
         let screen_ratio = (column as f32 + COLUMN_WIDTH as f32 / 2.0) / width as f32;
@@ -181,7 +185,9 @@ pub fn draw_with_effects(
 
         let corrected_distance = correct_fish_eye(hit.distance, ray_angle, player.direction);
         let column_end = (column as usize + COLUMN_WIDTH).min(wall_depth.len());
-        wall_depth[column as usize..column_end].fill(corrected_distance);
+        if (column as usize) < wall_depth.len() {
+            wall_depth[column as usize..column_end].fill(corrected_distance);
+        }
         let wall_height = (projection_distance / corrected_distance).min(height as f32 * 2.0);
         let wall_top = (height as f32 / 2.0 - wall_height / 2.0).round() as i32;
         let brightness = wall_brightness(corrected_distance, hit.hit_vertical_side);
@@ -202,7 +208,7 @@ pub fn draw_with_effects(
         canvas,
         player,
         players,
-        &wall_depth,
+        wall_depth,
         projection_distance,
         width,
         height,
@@ -211,7 +217,7 @@ pub fn draw_with_effects(
 
     let view_ctx = ViewContext {
         observer: player,
-        wall_depth: &wall_depth,
+        wall_depth,
         projection_distance,
         screen_width: width,
         screen_height: height,
@@ -250,17 +256,28 @@ fn draw_other_players(
     screen_height: u32,
     blink_phase: bool,
 ) -> Result<(), String> {
-    let mut visible: Vec<_> = players
-        .iter()
-        .filter(|player| player.id != observer.id)
-        .filter_map(|player| {
-            project_player(observer, player, projection_distance, screen_width)
-                .map(|projection| (player, projection))
-        })
-        .collect();
-    visible.sort_by(|(_, left), (_, right)| right.depth.total_cmp(&left.depth));
+    let mut visible_storage = [None; 64];
+    let mut count = 0;
 
-    for (player, projection) in visible {
+    for player in players.iter().filter(|player| player.id != observer.id) {
+        if let Some(projection) =
+            project_player(observer, player, projection_distance, screen_width)
+            && count < visible_storage.len()
+        {
+            visible_storage[count] = Some((player, projection));
+            count += 1;
+        }
+    }
+
+    let visible = &mut visible_storage[..count];
+    visible.sort_unstable_by(|a, b| {
+        let depth_a = a.map_or(0.0, |(_, p)| p.depth);
+        let depth_b = b.map_or(0.0, |(_, p)| p.depth);
+        depth_b.total_cmp(&depth_a)
+    });
+
+    for item in visible.iter().flatten() {
+        let (player, projection) = *item;
         draw_eye_sprite(
             canvas,
             player,
@@ -840,5 +857,32 @@ mod tests {
         let custom =
             ShotTracer::with_duration(2, 0.0, 0.0, 1.0, 1.0, start, DAMAGE_FEEDBACK_LIFETIME);
         assert_eq!(custom.duration, DAMAGE_FEEDBACK_LIFETIME);
+    }
+
+    #[test]
+    fn player_projection_bounds_and_ordering() {
+        let observer = PlayerSnapshot {
+            id: 1,
+            x: 1.5,
+            y: 1.5,
+            direction: 0.0,
+            score: 0,
+            is_protected: false,
+        };
+        let mut players = Vec::new();
+        for i in 2..66 {
+            players.push(PlayerSnapshot {
+                id: i,
+                x: 1.5 + (i as f32) * 0.1,
+                y: 1.5,
+                direction: 0.0,
+                score: 0,
+                is_protected: i % 2 == 0,
+            });
+        }
+        for player in &players {
+            let proj = project_player(&observer, player, 800.0, 800);
+            assert!(proj.is_some());
+        }
     }
 }

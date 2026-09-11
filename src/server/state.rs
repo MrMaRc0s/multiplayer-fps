@@ -20,6 +20,7 @@ struct Player {
     forward: i8,
     turn: i8,
     last_input_sequence: Option<u32>,
+    last_fire_sequence: Option<u32>,
     last_seen_tick: u32,
 }
 
@@ -110,6 +111,7 @@ impl ServerState {
                 forward: 0,
                 turn: 0,
                 last_input_sequence: None,
+                last_fire_sequence: None,
                 last_seen_tick: self.tick,
             },
         );
@@ -146,13 +148,18 @@ impl ServerState {
         true
     }
 
-    pub fn apply_fire(&mut self, address: SocketAddr, player_id: u32, _sequence: u32) -> bool {
+    pub fn apply_fire(&mut self, address: SocketAddr, player_id: u32, sequence: u32) -> bool {
         let Some(player) = self.players.get_mut(&address) else {
             return false;
         };
-        if player.id != player_id {
+        if player.id != player_id
+            || player
+                .last_fire_sequence
+                .is_some_and(|previous| !is_newer_sequence(sequence, previous))
+        {
             return false;
         }
+        player.last_fire_sequence = Some(sequence);
         player.last_seen_tick = self.tick;
         let pos = player.position;
         let dir = player.direction;
@@ -232,15 +239,21 @@ impl ServerState {
     pub fn remove_inactive_players(&mut self) -> Vec<String> {
         let current_tick = self.tick;
         let mut removed_usernames = Vec::new();
+        let mut removed_ids = Vec::new();
 
         self.players.retain(|_, player| {
             let inactive =
                 current_tick.wrapping_sub(player.last_seen_tick) >= INACTIVE_PLAYER_TICKS;
             if inactive {
                 removed_usernames.push(player.username.clone());
+                removed_ids.push(player.id);
             }
             !inactive
         });
+
+        for id in removed_ids {
+            self.combat.remove_player(id);
+        }
 
         removed_usernames
     }
@@ -256,6 +269,7 @@ impl ServerState {
             .map(|p| (p.id, p.username.clone()))
             .collect();
         players.sort_by_key(|(id, _)| *id);
+        players.truncate(crate::protocol::MAX_ROSTER_PLAYERS);
         ServerMessage::Roster { players }
     }
 
@@ -434,6 +448,29 @@ mod tests {
         }
 
         assert!(state.players[&player_address].position.x >= 1.2);
+    }
+
+    #[test]
+    fn wall_sliding_allows_movement_along_free_axis() {
+        let mut state = ServerState::new();
+        let player_address = address(4000);
+        let player_id = accepted_player_id(state.join(player_address, "chris".to_owned()));
+
+        // Position player at (3.5, 1.75) facing PI/4 (South-East).
+        // Row 2 below (y >= 2.0) has walls from x=2..=6, blocking Y movement.
+        // Row 1 (y = 1) is open corridor, allowing Eastward X movement.
+        state.set_player_position(player_id, Position { x: 3.5, y: 1.75 });
+        state.set_player_direction(player_id, std::f32::consts::FRAC_PI_4);
+
+        state.apply_input(player_address, player_id, 1, 1, 0);
+        state.update(0.1);
+
+        let pos = state.player_position(player_id).unwrap();
+        assert!(
+            pos.x > 3.5,
+            "x should advance along the corridor (slid along wall)"
+        );
+        assert_eq!(pos.y, 1.75, "y should be blocked by wall collision");
     }
 
     #[test]

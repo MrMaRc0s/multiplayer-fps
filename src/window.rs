@@ -46,7 +46,7 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
     let mut last_input = Instant::now();
     let mut fps_tracker = hud::FpsTracker::default();
     let mut roster: HashMap<u32, String> = HashMap::new();
-    let mut shot_tracers: Vec<view::ShotTracer> = Vec::new();
+    let mut shot_tracers: Vec<view::ShotTracer> = Vec::with_capacity(32);
     let mut hit_confirmation_until: Option<Instant> = None;
     let mut damage_feedback_until: Option<Instant> = None;
 

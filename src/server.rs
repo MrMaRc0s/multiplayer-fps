@@ -147,10 +147,16 @@ fn broadcast_message(
     state: &ServerState,
     message: &ServerMessage,
 ) -> io::Result<()> {
-    let packet = encode_server(message).map_err(io::Error::other)?;
-    for address in state.player_addresses() {
-        if let Err(error) = socket.send_to(&packet, address) {
-            eprintln!("Could not send message to {address}: {error}");
+    match encode_server(message) {
+        Ok(packet) => {
+            for address in state.player_addresses() {
+                if let Err(error) = socket.send_to(&packet, address) {
+                    eprintln!("Could not send message to {address}: {error}");
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("Could not encode broadcast message: {error}");
         }
     }
     Ok(())
@@ -161,7 +167,15 @@ fn send_response(
     destination: SocketAddr,
     message: &ServerMessage,
 ) -> io::Result<()> {
-    let packet = encode_server(message).map_err(io::Error::other)?;
-    socket.send_to(&packet, destination)?;
+    match encode_server(message) {
+        Ok(packet) => {
+            if let Err(error) = socket.send_to(&packet, destination) {
+                eprintln!("Could not send response to {destination}: {error}");
+            }
+        }
+        Err(error) => {
+            eprintln!("Could not encode response for {destination}: {error}");
+        }
+    }
     Ok(())
 }
