@@ -4,6 +4,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Scancode};
 use std::time::{Duration, Instant};
 
+mod hud;
 mod minimap;
 mod view;
 
@@ -39,8 +40,11 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
     let mut latest_snapshot: Option<WorldSnapshot> = None;
     let mut input_sequence = 0_u32;
     let mut last_input = Instant::now();
+    let mut fps_tracker = hud::FpsTracker::default();
 
     'game: loop {
+        fps_tracker.record_frame(Instant::now());
+
         for event in events.poll_iter() {
             if matches!(
                 event,
@@ -84,6 +88,7 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
             .find(|player| player.id == connection.player_id());
         view::draw(&mut canvas, &maze, own_player, players)?;
         minimap::draw(&mut canvas, &maze, connection.player_id(), players)?;
+        hud::draw(&mut canvas, fps_tracker.fps(), Some(connection.level()))?;
         canvas.present();
     }
 
