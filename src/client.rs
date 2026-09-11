@@ -1,5 +1,6 @@
 use crate::protocol::{
-    ClientMessage, MAX_PACKET_SIZE, PlayerSnapshot, ServerMessage, decode_server, encode_client,
+    ClientMessage, CombatEventKind, MAX_PACKET_SIZE, PlayerSnapshot, ServerMessage, decode_server,
+    encode_client,
 };
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -22,6 +23,13 @@ pub struct WorldSnapshot {
     pub tick: u32,
     pub level: u8,
     pub players: Vec<PlayerSnapshot>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct NetworkUpdates {
+    pub snapshot: Option<WorldSnapshot>,
+    pub combat_events: Vec<CombatEventKind>,
+    pub roster: Option<Vec<(u32, String)>>,
 }
 
 impl Connection {
@@ -48,9 +56,22 @@ impl Connection {
         Ok(())
     }
 
-    pub fn receive_latest_snapshot(&mut self) -> Result<Option<WorldSnapshot>, String> {
+    pub fn send_fire(&self, sequence: u32) -> Result<(), String> {
+        let packet = encode_client(&ClientMessage::Fire {
+            player_id: self.player_id,
+            sequence,
+        })
+        .map_err(|error| format!("could not prepare fire input: {error}"))?;
+
+        self.socket
+            .send(&packet)
+            .map_err(|error| format!("could not send fire input: {error}"))?;
+        Ok(())
+    }
+
+    pub fn receive_updates(&mut self) -> Result<NetworkUpdates, String> {
         let mut buffer = [0_u8; MAX_PACKET_SIZE];
-        let mut latest = None;
+        let mut updates = NetworkUpdates::default();
 
         loop {
             match self.socket.recv(&mut buffer) {
@@ -67,11 +88,17 @@ impl Connection {
                     {
                         self.last_snapshot_tick = Some(tick);
                         self.level = level;
-                        latest = Some(WorldSnapshot {
+                        updates.snapshot = Some(WorldSnapshot {
                             tick,
                             level,
                             players,
                         });
+                    }
+                    ServerMessage::CombatEvent { kind, .. } => {
+                        updates.combat_events.push(kind);
+                    }
+                    ServerMessage::Roster { players } => {
+                        updates.roster = Some(players);
                     }
                     ServerMessage::Rejected { reason } => {
                         return Err(format!("server ended the connection: {reason}"));
@@ -83,7 +110,11 @@ impl Connection {
             }
         }
 
-        Ok(latest)
+        Ok(updates)
+    }
+
+    pub fn receive_latest_snapshot(&mut self) -> Result<Option<WorldSnapshot>, String> {
+        self.receive_updates().map(|u| u.snapshot)
     }
 }
 
@@ -129,7 +160,9 @@ pub fn connect(server: SocketAddr, username: &str) -> Result<Connection, String>
                     ServerMessage::Rejected { reason } => {
                         Err(format!("server rejected the connection: {reason}"))
                     }
-                    ServerMessage::Snapshot { .. } => continue,
+                    ServerMessage::Snapshot { .. }
+                    | ServerMessage::CombatEvent { .. }
+                    | ServerMessage::Roster { .. } => continue,
                 };
             }
             Err(error)

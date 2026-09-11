@@ -1,10 +1,13 @@
 use crate::client::{Connection, WorldSnapshot};
+use crate::protocol::CombatEventKind;
 use crate::world::Maze;
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Scancode};
+use sdl2::mouse::MouseButton;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-mod hud;
+pub mod hud;
 mod minimap;
 mod view;
 
@@ -18,7 +21,7 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
         .video()
         .map_err(|error| format!("could not initialize video: {error}"))?;
     let title = format!(
-        "Maze Wars - {username} - Player {} - Level {} - W/S move, A/D turn",
+        "Maze Wars - {username} - Player {} - Level {} - W/S move, A/D turn, Space shoot",
         connection.player_id(),
         connection.level()
     );
@@ -36,25 +39,41 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
     let mut events = sdl
         .event_pump()
         .map_err(|error| format!("could not read input events: {error}"))?;
-    let maze = Maze::level_one();
+    let mut maze = Maze::for_level(connection.level()).unwrap_or_else(Maze::level_one);
     let mut latest_snapshot: Option<WorldSnapshot> = None;
     let mut input_sequence = 0_u32;
+    let mut fire_sequence = 0_u32;
     let mut last_input = Instant::now();
     let mut fps_tracker = hud::FpsTracker::default();
+    let mut roster: HashMap<u32, String> = HashMap::new();
+    let mut shot_tracers: Vec<view::ShotTracer> = Vec::new();
+    let mut hit_confirmation_until: Option<Instant> = None;
+    let mut damage_feedback_until: Option<Instant> = None;
 
     'game: loop {
-        fps_tracker.record_frame(Instant::now());
+        let now = Instant::now();
+        fps_tracker.record_frame(now);
 
         for event in events.poll_iter() {
-            if matches!(
-                event,
+            match event {
                 Event::Quit { .. }
-                    | Event::KeyDown {
-                        keycode: Some(Keycode::Escape),
-                        ..
-                    }
-            ) {
-                break 'game;
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => break 'game,
+                Event::KeyDown {
+                    keycode: Some(Keycode::Space),
+                    repeat: false,
+                    ..
+                }
+                | Event::MouseButtonDown {
+                    mouse_btn: MouseButton::Left,
+                    ..
+                } => {
+                    fire_sequence = fire_sequence.wrapping_add(1);
+                    connection.send_fire(fire_sequence)?;
+                }
+                _ => {}
             }
         }
 
@@ -76,9 +95,56 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
             connection.send_input(input_sequence, forward, turn)?;
             last_input = Instant::now();
         }
-        if let Some(snapshot) = connection.receive_latest_snapshot()? {
+
+        let updates = connection.receive_updates()?;
+        if let Some(roster_players) = updates.roster {
+            for (id, name) in roster_players {
+                roster.insert(id, name);
+            }
+        }
+
+        for event in updates.combat_events {
+            match event {
+                CombatEventKind::ShotFired {
+                    shooter_id,
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                } => {
+                    shot_tracers.push(view::ShotTracer::new(
+                        shooter_id,
+                        from_x,
+                        from_y,
+                        to_x,
+                        to_y,
+                        now,
+                    ));
+                }
+                CombatEventKind::PlayerHit {
+                    shooter_id,
+                    target_id,
+                } => {
+                    if shooter_id == connection.player_id() {
+                        hit_confirmation_until = Some(now + view::HIT_CONFIRMATION_LIFETIME);
+                    }
+                    if target_id == connection.player_id() {
+                        damage_feedback_until = Some(now + view::DAMAGE_FEEDBACK_LIFETIME);
+                    }
+                }
+            }
+        }
+
+        if let Some(snapshot) = updates.snapshot {
+            if snapshot.level != maze.level()
+                && let Some(new_maze) = Maze::for_level(snapshot.level)
+            {
+                maze = new_maze;
+            }
             latest_snapshot = Some(snapshot);
         }
+
+        shot_tracers.retain(|tracer| tracer.is_active(now));
 
         let players = latest_snapshot
             .as_ref()
@@ -86,9 +152,48 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
         let own_player = players
             .iter()
             .find(|player| player.id == connection.player_id());
-        view::draw(&mut canvas, &maze, own_player, players)?;
-        minimap::draw(&mut canvas, &maze, connection.player_id(), players)?;
-        hud::draw(&mut canvas, fps_tracker.fps(), Some(connection.level()))?;
+        let mut scoreboard_storage = [hud::ScoreboardEntry::new(0, None, 0); 64];
+        let (scoreboard, count) = if players.is_empty() {
+            scoreboard_storage[0] =
+                hud::ScoreboardEntry::new(connection.player_id(), Some(username), 0);
+            (&scoreboard_storage[..1], 1)
+        } else {
+            let count = players.len().min(64);
+            for (i, player) in players.iter().take(count).enumerate() {
+                let name = if player.id == connection.player_id() {
+                    Some(username)
+                } else {
+                    roster.get(&player.id).map(|s| s.as_str())
+                };
+                scoreboard_storage[i] = hud::ScoreboardEntry::new(player.id, name, player.score);
+            }
+            (&scoreboard_storage[..count], count)
+        };
+
+        let combat_visuals = view::CombatVisuals {
+            tracers: &shot_tracers,
+            hit_confirmation_until,
+            damage_feedback_until,
+            now: Some(now),
+        };
+
+        view::draw_with_effects(&mut canvas, &maze, own_player, players, &combat_visuals)?;
+        minimap::draw_with_effects(
+            &mut canvas,
+            &maze,
+            connection.player_id(),
+            players,
+            &shot_tracers,
+            Some(now),
+        )?;
+        hud::draw(
+            &mut canvas,
+            fps_tracker.fps(),
+            Some(connection.level()),
+            Some(maze.level()),
+            Some(connection.player_id()),
+            &scoreboard[..count],
+        )?;
         canvas.present();
     }
 

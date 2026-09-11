@@ -1,12 +1,13 @@
 use self::state::ServerState;
 use crate::protocol::{
-    ClientMessage, MAX_PACKET_SIZE, ServerMessage, decode_client, encode_server,
+    ClientMessage, CombatEventKind, MAX_PACKET_SIZE, ServerMessage, decode_client, encode_server,
 };
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub mod combat;
 mod state;
 
 pub const SERVER_ADDRESS: &str = "0.0.0.0:34254";
@@ -39,9 +40,48 @@ pub fn run() -> io::Result<()> {
         let elapsed = now.duration_since(last_tick);
         if elapsed >= TICK_INTERVAL {
             state.update(elapsed.as_secs_f32());
-            for username in state.remove_inactive_players() {
-                println!("{username} left after timing out");
+            let timed_out = state.remove_inactive_players();
+            if !timed_out.is_empty() {
+                for username in timed_out {
+                    println!("{username} left after timing out");
+                }
+                broadcast_message(&socket, &state, &state.roster())?;
             }
+
+            let combat_events = state.drain_combat_events();
+            for event in combat_events {
+                let msg = match event {
+                    combat::CombatEvent::ShotFired {
+                        event_id,
+                        shooter_id,
+                        position,
+                        direction,
+                    } => ServerMessage::CombatEvent {
+                        sequence: event_id,
+                        kind: CombatEventKind::ShotFired {
+                            shooter_id,
+                            from_x: position.x,
+                            from_y: position.y,
+                            to_x: position.x + direction.cos() * 20.0,
+                            to_y: position.y + direction.sin() * 20.0,
+                        },
+                    },
+                    combat::CombatEvent::PlayerHit {
+                        event_id,
+                        shooter_id,
+                        target_id,
+                        ..
+                    } => ServerMessage::CombatEvent {
+                        sequence: event_id,
+                        kind: CombatEventKind::PlayerHit {
+                            shooter_id,
+                            target_id,
+                        },
+                    },
+                };
+                broadcast_message(&socket, &state, &msg)?;
+            }
+
             broadcast_snapshot(&socket, &state)?;
             last_tick = now;
         }
@@ -73,9 +113,11 @@ fn handle_packet(
                 && let Some((username, player_id)) = state.player_identity(source)
             {
                 println!("{username} joined from {source} as player {player_id}");
+                send_response(socket, source, &response)?;
+                broadcast_message(socket, state, &state.roster())?;
+            } else {
+                send_response(socket, source, &response)?;
             }
-
-            send_response(socket, source, &response)?;
         }
         ClientMessage::Input {
             player_id,
@@ -85,16 +127,30 @@ fn handle_packet(
         } => {
             state.apply_input(source, player_id, sequence, forward, turn);
         }
+        ClientMessage::Fire {
+            player_id,
+            sequence,
+        } => {
+            state.apply_fire(source, player_id, sequence);
+        }
     }
 
     Ok(())
 }
 
 fn broadcast_snapshot(socket: &UdpSocket, state: &ServerState) -> io::Result<()> {
-    let packet = encode_server(&state.snapshot()).map_err(io::Error::other)?;
+    broadcast_message(socket, state, &state.snapshot())
+}
+
+fn broadcast_message(
+    socket: &UdpSocket,
+    state: &ServerState,
+    message: &ServerMessage,
+) -> io::Result<()> {
+    let packet = encode_server(message).map_err(io::Error::other)?;
     for address in state.player_addresses() {
         if let Err(error) = socket.send_to(&packet, address) {
-            eprintln!("Could not send snapshot to {address}: {error}");
+            eprintln!("Could not send message to {address}: {error}");
         }
     }
     Ok(())
