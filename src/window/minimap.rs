@@ -22,6 +22,7 @@ pub(super) fn draw(
             let color = match maze.tile(x as i32, y as i32) {
                 Tile::Wall => Color::RGB(55, 88, 105),
                 Tile::Floor => Color::RGB(13, 22, 29),
+                Tile::Exit => Color::RGB(240, 200, 50),
             };
             canvas.set_draw_color(color);
             canvas.fill_rect(Rect::new(
