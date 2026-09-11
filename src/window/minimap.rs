@@ -16,6 +16,17 @@ pub const MARGIN_X: i32 = 24;
 #[allow(dead_code)]
 pub const MARGIN_Y: i32 = 24;
 
+pub const LOCAL_PLAYER_COLOR: Color = Color::RGB(70, 220, 125);
+pub const OTHER_PLAYER_COLOR: Color = Color::RGB(225, 73, 75);
+
+pub fn player_minimap_color(player_id: u32, own_player_id: u32) -> Color {
+    if player_id == own_player_id {
+        LOCAL_PLAYER_COLOR
+    } else {
+        OTHER_PLAYER_COLOR
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MinimapLayout {
     pub origin_x: i32,
@@ -24,6 +35,13 @@ pub struct MinimapLayout {
     pub map_width_px: u32,
     pub map_height_px: u32,
     pub player_size: u32,
+}
+
+pub fn player_screen_position(layout: &MinimapLayout, x: f32, y: f32) -> Point {
+    Point::new(
+        layout.origin_x + (x * layout.tile_pixels as f32).round() as i32,
+        layout.origin_y + (y * layout.tile_pixels as f32).round() as i32,
+    )
 }
 
 pub fn compute_layout(maze_width: usize, maze_height: usize) -> MinimapLayout {
@@ -111,24 +129,12 @@ pub(super) fn draw_with_effects(
 
     // Draw other players
     for player in players.iter().filter(|p| p.id != own_player_id) {
-        draw_player(
-            canvas,
-            player,
-            Color::RGB(225, 73, 75),
-            &layout,
-            blink_phase,
-        )?;
+        draw_player(canvas, player, OTHER_PLAYER_COLOR, &layout, blink_phase)?;
     }
 
     // Draw local player
     if let Some(player) = players.iter().find(|p| p.id == own_player_id) {
-        draw_player(
-            canvas,
-            player,
-            Color::RGB(70, 220, 125),
-            &layout,
-            blink_phase,
-        )?;
+        draw_player(canvas, player, LOCAL_PLAYER_COLOR, &layout, blink_phase)?;
     }
 
     Ok(())
@@ -157,10 +163,7 @@ fn draw_player(
     layout: &MinimapLayout,
     blink_phase: bool,
 ) -> Result<(), String> {
-    let center = Point::new(
-        layout.origin_x + (player.x * layout.tile_pixels as f32).round() as i32,
-        layout.origin_y + (player.y * layout.tile_pixels as f32).round() as i32,
-    );
+    let center = player_screen_position(layout, player.x, player.y);
     let half_size = layout.player_size as i32 / 2;
 
     let is_protected = player.is_protected;

@@ -125,10 +125,14 @@ impl<'a> CombatVisuals<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RayHit {
-    distance: f32,
-    hit_vertical_side: bool,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RayHit {
+    pub distance: f32,
+    pub hit_vertical_side: bool,
+}
+
+pub fn correct_fish_eye(raw_distance: f32, ray_angle: f32, player_direction: f32) -> f32 {
+    (raw_distance * (ray_angle - player_direction).cos()).max(MIN_DISTANCE)
 }
 
 #[allow(dead_code)]
@@ -138,11 +142,11 @@ pub(super) fn draw(
     player: Option<&PlayerSnapshot>,
     players: &[PlayerSnapshot],
 ) -> Result<(), String> {
-    draw_with_effects(canvas, maze, player, players, &CombatVisuals::default())
+    let empty_effects = CombatVisuals::default();
+    draw_with_effects(canvas, maze, player, players, &empty_effects)
 }
 
-#[allow(dead_code)]
-pub(super) fn draw_with_effects(
+pub fn draw_with_effects(
     canvas: &mut Canvas<Window>,
     maze: &Maze,
     player: Option<&PlayerSnapshot>,
@@ -175,8 +179,7 @@ pub(super) fn draw_with_effects(
             continue;
         };
 
-        let corrected_distance =
-            (hit.distance * (ray_angle - player.direction).cos()).max(MIN_DISTANCE);
+        let corrected_distance = correct_fish_eye(hit.distance, ray_angle, player.direction);
         let column_end = (column as usize + COLUMN_WIDTH).min(wall_depth.len());
         wall_depth[column as usize..column_end].fill(corrected_distance);
         let wall_height = (projection_distance / corrected_distance).min(height as f32 * 2.0);
@@ -576,7 +579,7 @@ fn draw_damage_feedback(
     Ok(())
 }
 
-fn cast_ray(maze: &Maze, origin: Position, angle: f32) -> Option<RayHit> {
+pub fn cast_ray(maze: &Maze, origin: Position, angle: f32) -> Option<RayHit> {
     let direction_x = angle.cos();
     let direction_y = angle.sin();
     let mut map_x = origin.x.floor() as i32;
@@ -629,7 +632,7 @@ fn cast_ray(maze: &Maze, origin: Position, angle: f32) -> Option<RayHit> {
     None
 }
 
-fn wall_brightness(distance: f32, hit_vertical_side: bool) -> u8 {
+pub fn wall_brightness(distance: f32, hit_vertical_side: bool) -> u8 {
     let distance_shade = (225.0 / (1.0 + distance * 0.12)).clamp(45.0, 225.0);
     let side_shade = if hit_vertical_side { 1.0 } else { 0.72 };
     (distance_shade * side_shade).round() as u8

@@ -1,8 +1,7 @@
-use maze_wars::client::{DEFAULT_SERVER_ADDRESS, connect};
-use maze_wars::protocol::MAX_USERNAME_BYTES;
+use maze_wars::client::{DEFAULT_SERVER_ADDRESS, connect, parse_server_address, validate_username};
 use maze_wars::window;
 use std::io::{self, Write};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -32,27 +31,16 @@ fn run() -> Result<(), String> {
 
 fn ask_for_server() -> Result<SocketAddr, String> {
     let input = prompt(&format!("Enter IP Address [{DEFAULT_SERVER_ADDRESS}]: "))?;
-    let address = if input.is_empty() {
-        DEFAULT_SERVER_ADDRESS
-    } else {
-        input.as_str()
-    };
-
-    address
-        .to_socket_addrs()
-        .map_err(|error| format!("invalid server address '{address}': {error}"))?
-        .next()
-        .ok_or_else(|| format!("server address '{address}' did not resolve"))
+    parse_server_address(&input)
 }
 
 fn ask_for_username() -> Result<String, String> {
     loop {
-        let username = prompt("Enter Name: ")?;
-        if !username.is_empty() && username.len() <= MAX_USERNAME_BYTES {
-            return Ok(username);
+        let input = prompt("Enter Name: ")?;
+        match validate_username(&input) {
+            Ok(username) => return Ok(username),
+            Err(error) => println!("{error}"),
         }
-
-        println!("Name must contain 1 to {MAX_USERNAME_BYTES} bytes.");
     }
 }
 

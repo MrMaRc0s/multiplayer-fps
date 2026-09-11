@@ -26,7 +26,7 @@ struct Player {
 use super::combat::{CombatEvent, CombatManager, CombatPlayer};
 
 #[derive(Debug)]
-pub(super) struct ServerState {
+pub struct ServerState {
     players: HashMap<SocketAddr, Player>,
     next_player_id: u32,
     tick: u32,
@@ -35,7 +35,7 @@ pub(super) struct ServerState {
 }
 
 impl ServerState {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             players: HashMap::new(),
             next_player_id: 1,
@@ -44,22 +44,30 @@ impl ServerState {
             combat: CombatManager::new(),
         }
     }
+}
 
-    pub(super) fn player_count(&self) -> usize {
+impl Default for ServerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ServerState {
+    pub fn player_count(&self) -> usize {
         self.players.len()
     }
 
-    pub(super) fn player_identity(&self, address: SocketAddr) -> Option<(&str, u32)> {
+    pub fn player_identity(&self, address: SocketAddr) -> Option<(&str, u32)> {
         self.players
             .get(&address)
             .map(|player| (player.username.as_str(), player.id))
     }
 
-    pub(super) fn player_addresses(&self) -> impl Iterator<Item = SocketAddr> + '_ {
+    pub fn player_addresses(&self) -> impl Iterator<Item = SocketAddr> + '_ {
         self.players.keys().copied()
     }
 
-    pub(super) fn join(&mut self, address: SocketAddr, username: String) -> ServerMessage {
+    pub fn join(&mut self, address: SocketAddr, username: String) -> ServerMessage {
         if let Some(player) = self.players.get_mut(&address) {
             player.last_seen_tick = self.tick;
             return ServerMessage::Accepted {
@@ -112,7 +120,7 @@ impl ServerState {
         }
     }
 
-    pub(super) fn apply_input(
+    pub fn apply_input(
         &mut self,
         address: SocketAddr,
         player_id: u32,
@@ -138,12 +146,7 @@ impl ServerState {
         true
     }
 
-    pub(super) fn apply_fire(
-        &mut self,
-        address: SocketAddr,
-        player_id: u32,
-        _sequence: u32,
-    ) -> bool {
+    pub fn apply_fire(&mut self, address: SocketAddr, player_id: u32, _sequence: u32) -> bool {
         let Some(player) = self.players.get_mut(&address) else {
             return false;
         };
@@ -157,7 +160,7 @@ impl ServerState {
             .try_fire(player_id, pos, dir, &self.maze, self.tick)
     }
 
-    pub(super) fn update(&mut self, elapsed_seconds: f32) {
+    pub fn update(&mut self, elapsed_seconds: f32) {
         if !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 {
             return;
         }
@@ -206,8 +209,10 @@ impl ServerState {
             .update(elapsed_seconds, &self.maze, &mut combat_players, self.tick);
 
         let exit_reached = self.players.values().any(|player| {
-            self.maze
-                .is_exit(player.position.x.floor() as i32, player.position.y.floor() as i32)
+            self.maze.is_exit(
+                player.position.x.floor() as i32,
+                player.position.y.floor() as i32,
+            )
         });
 
         if exit_reached {
@@ -224,7 +229,7 @@ impl ServerState {
         self.tick = self.tick.wrapping_add(1);
     }
 
-    pub(super) fn remove_inactive_players(&mut self) -> Vec<String> {
+    pub fn remove_inactive_players(&mut self) -> Vec<String> {
         let current_tick = self.tick;
         let mut removed_usernames = Vec::new();
 
@@ -240,11 +245,11 @@ impl ServerState {
         removed_usernames
     }
 
-    pub(super) fn drain_combat_events(&mut self) -> Vec<CombatEvent> {
+    pub fn drain_combat_events(&mut self) -> Vec<CombatEvent> {
         self.combat.drain_events()
     }
 
-    pub(super) fn roster(&self) -> ServerMessage {
+    pub fn roster(&self) -> ServerMessage {
         let mut players: Vec<_> = self
             .players
             .values()
@@ -254,7 +259,7 @@ impl ServerState {
         ServerMessage::Roster { players }
     }
 
-    pub(super) fn snapshot(&self) -> ServerMessage {
+    pub fn snapshot(&self) -> ServerMessage {
         let mut players: Vec<_> = self
             .players
             .values()
@@ -273,6 +278,56 @@ impl ServerState {
             tick: self.tick,
             level: self.maze.level(),
             players,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn tick(&self) -> u32 {
+        self.tick
+    }
+
+    #[allow(dead_code)]
+    pub fn maze(&self) -> &Maze {
+        &self.maze
+    }
+
+    #[allow(dead_code)]
+    pub fn score(&self, player_id: u32) -> i32 {
+        self.combat.score(player_id)
+    }
+
+    #[allow(dead_code)]
+    pub fn is_protected(&self, player_id: u32) -> bool {
+        self.combat.is_protected(player_id, self.tick)
+    }
+
+    #[allow(dead_code)]
+    pub fn player_position(&self, player_id: u32) -> Option<Position> {
+        self.players
+            .values()
+            .find(|player| player.id == player_id)
+            .map(|player| player.position)
+    }
+
+    #[allow(dead_code)]
+    pub fn player_direction(&self, player_id: u32) -> Option<f32> {
+        self.players
+            .values()
+            .find(|player| player.id == player_id)
+            .map(|player| player.direction)
+    }
+
+    #[allow(dead_code)]
+    pub fn set_player_position(&mut self, player_id: u32, position: Position) {
+        if let Some(player) = self.players.values_mut().find(|p| p.id == player_id) {
+            player.position = position;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_player_direction(&mut self, player_id: u32, direction: f32) {
+        if let Some(player) = self.players.values_mut().find(|p| p.id == player_id) {
+            player.direction = direction;
         }
     }
 }
@@ -514,6 +569,9 @@ mod tests {
         let ServerMessage::Roster { players } = roster else {
             panic!("expected roster");
         };
-        assert_eq!(players, vec![(id1, "shooter".to_owned()), (id2, "target".to_owned())]);
+        assert_eq!(
+            players,
+            vec![(id1, "shooter".to_owned()), (id2, "target".to_owned())]
+        );
     }
 }

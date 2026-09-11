@@ -3,7 +3,7 @@ use crate::protocol::{
     encode_client,
 };
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 pub const DEFAULT_SERVER_ADDRESS: &str = "127.0.0.1:34254";
@@ -116,6 +116,35 @@ impl Connection {
     pub fn receive_latest_snapshot(&mut self) -> Result<Option<WorldSnapshot>, String> {
         self.receive_updates().map(|u| u.snapshot)
     }
+}
+
+pub fn parse_server_address(input: &str) -> Result<SocketAddr, String> {
+    let trimmed = input.trim();
+    let address = if trimmed.is_empty() {
+        DEFAULT_SERVER_ADDRESS
+    } else {
+        trimmed
+    };
+
+    address
+        .to_socket_addrs()
+        .map_err(|error| format!("invalid server address '{address}': {error}"))?
+        .next()
+        .ok_or_else(|| format!("server address '{address}' did not resolve"))
+}
+
+pub fn validate_username(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Name cannot be empty.".to_string());
+    }
+    if trimmed.len() > crate::protocol::MAX_USERNAME_BYTES {
+        return Err(format!(
+            "Name must contain 1 to {} bytes.",
+            crate::protocol::MAX_USERNAME_BYTES
+        ));
+    }
+    Ok(trimmed.to_string())
 }
 
 pub fn connect(server: SocketAddr, username: &str) -> Result<Connection, String> {

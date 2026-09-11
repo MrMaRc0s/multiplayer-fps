@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub mod combat;
-mod state;
+pub mod state;
 
 pub const SERVER_ADDRESS: &str = "0.0.0.0:34254";
 pub const MAX_PLAYERS: usize = 64;

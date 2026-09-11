@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub mod hud;
-mod minimap;
-mod view;
+pub mod minimap;
+pub mod view;
 
 const WINDOW_WIDTH: u32 = 960;
 const WINDOW_HEIGHT: u32 = 600;
@@ -113,12 +113,7 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
                     to_y,
                 } => {
                     shot_tracers.push(view::ShotTracer::new(
-                        shooter_id,
-                        from_x,
-                        from_y,
-                        to_x,
-                        to_y,
-                        now,
+                        shooter_id, from_x, from_y, to_x, to_y, now,
                     ));
                 }
                 CombatEventKind::PlayerHit {
@@ -189,7 +184,6 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
         hud::draw(
             &mut canvas,
             fps_tracker.fps(),
-            Some(connection.level()),
             Some(maze.level()),
             Some(connection.player_id()),
             &scoreboard[..count],

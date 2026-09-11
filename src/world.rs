@@ -142,6 +142,10 @@ impl Maze {
         self.rows.len()
     }
 
+    pub fn rows(&self) -> &'static [&'static str] {
+        self.rows
+    }
+
     pub fn spawns(&self) -> &'static [Position] {
         self.spawns
     }

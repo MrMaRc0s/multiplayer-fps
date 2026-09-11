@@ -1,8 +1,8 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
-const MAGIC: &[u8; 4] = b"MZWR";
-const VERSION: u8 = 1;
+pub const MAGIC: &[u8; 4] = b"MZWR";
+pub const VERSION: u8 = 1;
 const JOIN: u8 = 1;
 const INPUT: u8 = 2;
 const FIRE: u8 = 3;
