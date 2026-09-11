@@ -79,7 +79,7 @@ pub fn run() -> io::Result<()> {
                                 to_y: hit_pos.y,
                             },
                         }
-                    }
+                    },
                     combat::CombatEvent::PlayerHit {
                         event_id,
                         shooter_id,
