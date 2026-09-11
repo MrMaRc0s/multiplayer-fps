@@ -570,7 +570,6 @@ fn draw_shot_tracer(
             && center_x >= -50.0
             && center_x < ctx.screen_width as f32 + 50.0
         {
-            let size = ((ctx.projection_distance / depth) * 0.22).clamp(8.0, 48.0);
             let size = projectile_screen_size(ctx.projection_distance, depth);
             let half = size / 2.0;
 
