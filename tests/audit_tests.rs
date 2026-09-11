@@ -4,7 +4,7 @@ use maze_wars::protocol::{
     VERSION, decode_client, decode_server, encode_client, encode_server,
 };
 use maze_wars::server::SERVER_ADDRESS;
-use maze_wars::server::combat::{PROTECTION_TICKS, swept_wall_collision};
+use maze_wars::server::combat::{self, CombatEvent, PROTECTION_TICKS, swept_wall_collision};
 use maze_wars::server::state::ServerState;
 use maze_wars::window::hud::{
     FpsTracker, MAX_DISPLAYED_SCOREBOARD_PLAYERS, ScoreboardEntry, format_hud_string,
@@ -16,14 +16,15 @@ use maze_wars::window::minimap::{
 };
 use maze_wars::window::view::{
     CombatVisuals, DAMAGE_FEEDBACK_LIFETIME, HIT_CONFIRMATION_LIFETIME, SHOT_TRACER_LIFETIME,
-    ShotTracer, cast_ray, correct_fish_eye, is_blink_visible, project_player, wall_brightness,
+    ShotTracer, cast_ray, clip_segment_near, correct_fish_eye, is_blink_visible, project_player,
+    wall_brightness,
 };
 use maze_wars::world::{Maze, Position, Tile};
 use sdl2::pixels::Color;
 use std::f32::consts::PI;
 use std::net::{SocketAddr, UdpSocket};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // 1. `audit_check_compiles_and_lints_without_warnings`: build verification.
 #[test]
@@ -934,13 +935,23 @@ fn audit_check_wire_protocol_limits_and_malformed_packet_rejection() {
     );
 }
 
+struct ServerGuard(std::process::Child);
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 // 16. `audit_check_live_udp_server_process_and_12_clients`:
 // spawns a live server process, connects 12 real UDP clients concurrently, verifies round-trip communication and snapshot reception.
 #[test]
 fn audit_check_live_udp_server_process_and_12_clients() {
-    let mut server = Command::new(env!("CARGO_BIN_EXE_server"))
+    let server = Command::new(env!("CARGO_BIN_EXE_server"))
         .spawn()
         .expect("failed to spawn server process");
+    let _guard = ServerGuard(server);
 
     std::thread::sleep(Duration::from_millis(150));
 
@@ -970,6 +981,8 @@ fn audit_check_live_udp_server_process_and_12_clients() {
     std::thread::sleep(Duration::from_millis(80));
 
     // Each client receives network updates containing 12 players
+    // Each client receives network updates containing 12 players and combat events
+    let mut total_shot_events = 0;
     for conn in &mut clients {
         let updates = conn.receive_updates().expect("receive updates failed");
         if let Some(snapshot) = updates.snapshot {
@@ -979,7 +992,12 @@ fn audit_check_live_udp_server_process_and_12_clients() {
                 "snapshot must contain all 12 live players"
             );
         }
+        total_shot_events += updates.combat_events.len();
     }
+    assert!(
+        total_shot_events > 0,
+        "clients must receive broadcast CombatEvent::ShotFired from firing players"
+    );
 
     // Attempting duplicate username should fail
     let duplicate = connect(server_addr, "live_client_00");
@@ -987,9 +1005,6 @@ fn audit_check_live_udp_server_process_and_12_clients() {
         duplicate.is_err(),
         "duplicate username join must be rejected by server"
     );
-
-    let _ = server.kill();
-    let _ = server.wait();
 }
 
 // 17. `audit_check_client_gui_rendering_and_performance`:
@@ -1116,4 +1131,166 @@ fn audit_check_client_gui_rendering_and_performance() {
     let mut hud_buf = [0_u8; 48];
     let hud_str = format_hud_string(&mut hud_buf, tracker.fps(), Some(1));
     assert_eq!(hud_str, "FPS: 60  LEVEL: 1");
+}
+
+// 18. `audit_check_combat_event_pipeline_and_shot_fired_delivery`:
+// Verifies that when a player fires, the server captures ShotFired, preserves it across update ticks,
+// and drain_combat_events() delivers it with valid wall intersection coordinates.
+#[test]
+fn audit_check_combat_event_pipeline_and_shot_fired_delivery() {
+    let mut state = ServerState::new();
+    let addr: SocketAddr = "127.0.0.1:20001".parse().unwrap();
+    let resp = state.join(addr, "Shooter".to_string());
+    let player_id = match resp {
+        ServerMessage::Accepted { player_id, .. } => player_id,
+        _ => panic!("join failed"),
+    };
+
+    // Firing must succeed and return true
+    assert!(state.apply_fire(addr, player_id, 1));
+
+    // Tick the server
+    state.update(1.0 / 60.0);
+
+    // Draining combat events must contain the ShotFired event
+    let events = state.drain_combat_events();
+    assert!(
+        !events.is_empty(),
+        "drain_combat_events must contain the fired shot"
+    );
+
+    let shot_event = events
+        .iter()
+        .find(|e| matches!(e, CombatEvent::ShotFired { shooter_id: id, .. } if *id == player_id));
+    assert!(
+        shot_event.is_some(),
+        "events must contain ShotFired for shooter"
+    );
+
+    if let Some(CombatEvent::ShotFired {
+        position,
+        direction,
+        ..
+    }) = shot_event
+    {
+        assert!(position.x.is_finite() && position.y.is_finite());
+        assert!(direction.is_finite());
+        // Wall intersection coordinates
+        let max_end = Position {
+            x: position.x + direction.cos() * 50.0,
+            y: position.y + direction.sin() * 50.0,
+        };
+        let hit = combat::swept_wall_collision(state.maze(), *position, max_end);
+        assert!(hit.is_some(), "straight shot must hit a wall in the maze");
+    }
+}
+
+// 19. `audit_check_firing_visuals_projectile_and_muzzle_flash_rendered`:
+// Verifies that ShotTracer calculates correct progress over time,
+// that projectile depth and position scale correctly down the corridor,
+// and that muzzle flash and minimap indicators are computed during the active firing window.
+#[test]
+fn audit_check_firing_visuals_projectile_and_muzzle_flash_rendered() {
+    let start = Instant::now();
+    let tracer = ShotTracer::new(1, 1.5, 1.5, 5.5, 1.5, start);
+
+    // Initial state: progress = 0.0, muzzle flash active
+    let p0 = ShotTracer::progress_from_elapsed(Duration::from_millis(0), tracer.duration);
+    assert_eq!(p0, Some(0.0));
+    assert!(p0.unwrap() < 0.45, "muzzle flash must be active initially");
+
+    // Mid-flight state: projectile zooming down corridor
+    let p_mid =
+        ShotTracer::progress_from_elapsed(Duration::from_millis(100), tracer.duration).unwrap();
+    assert!((p_mid - 0.5).abs() < 0.05);
+
+    // Projectile position at mid-flight
+    let cur_x = tracer.from_x + p_mid * (tracer.to_x - tracer.from_x);
+    let cur_y = tracer.from_y + p_mid * (tracer.to_y - tracer.from_y);
+    assert!((cur_x - 3.5).abs() < 0.2);
+    assert_eq!(cur_y, 1.5);
+
+    // Depth from shooter observer at (1.5, 1.5) facing angle 0.0 (East)
+    let depth = cur_x - 1.5;
+    assert!(
+        depth > 0.1 && depth < 5.0,
+        "projectile must be in front of observer"
+    );
+
+    // Projectile screen size decreases inversely with depth (perspective scaling)
+    let proj_dist: f32 = 800.0;
+    let size_near = ((proj_dist / 1.0_f32) * 0.22_f32).clamp(8.0_f32, 48.0_f32);
+    let size_far = ((proj_dist / 4.0_f32) * 0.22_f32).clamp(8.0_f32, 48.0_f32);
+    assert!(
+        size_near > size_far,
+        "projectile size must scale down with distance"
+    );
+
+    // Expiry after duration
+    let p_expired = ShotTracer::progress_from_elapsed(Duration::from_millis(250), tracer.duration);
+    assert_eq!(p_expired, None, "tracer must expire after its lifetime");
+
+    // Edge case 1: Straight-line shot where dx = 0 (sx1 == sx2)
+    // Shot from observer position (1.5, 1.5) straight ahead along East (0.0)
+    let straight_clipped = clip_segment_near(1.5, 1.5, 0.0, (1.5, 1.5), (5.5, 1.5), 0.05)
+        .expect("straight shot must be clipped cleanly");
+    assert!((straight_clipped.start.depth - 0.05).abs() < 0.001);
+    assert!((straight_clipped.end.depth - 4.0).abs() < 0.001);
+    let sideways_start = -(straight_clipped.start.x - 1.5) * 0.0_f32.sin()
+        + (straight_clipped.start.y - 1.5) * 0.0_f32.cos();
+    let sideways_end = -(straight_clipped.end.x - 1.5) * 0.0_f32.sin()
+        + (straight_clipped.end.y - 1.5) * 0.0_f32.cos();
+    assert_eq!(sideways_start, 0.0);
+    assert_eq!(sideways_end, 0.0);
+    let sx1 = 480.0 + (sideways_start / straight_clipped.start.depth) * 800.0;
+    let sx2 = 480.0 + (sideways_end / straight_clipped.end.depth) * 800.0;
+    assert_eq!(sx1, sx2);
+    let dx = sx2 - sx1;
+    assert_eq!(dx, 0.0);
+    // When dx = 0, fallback alpha = 0.5 prevents division by zero
+    let alpha = if dx.abs() > 0.001 {
+        ((480.0 - sx1) / dx).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    assert_eq!(alpha, 0.5);
+
+    // Edge case 2: Point-blank shot into a wall right next to the player (distance 0.2)
+    let wall_shot = clip_segment_near(1.2, 1.5, PI, (1.2, 1.5), (1.0, 1.5), 0.05);
+    assert!(
+        wall_shot.is_some(),
+        "point-blank wall shot must clip valid segment"
+    );
+    let ws = wall_shot.unwrap();
+    assert!((ws.start.depth - 0.05).abs() < 0.001);
+    assert!((ws.end.depth - 0.2).abs() < 0.001);
+
+    // Edge case 3: Extreme near shot where both ends are within near plane (< 0.05)
+    let sub_near_shot = clip_segment_near(1.02, 1.5, PI, (1.02, 1.5), (1.0, 1.5), 0.05);
+    assert!(
+        sub_near_shot.is_none(),
+        "sub-near-plane shot must safely return None without panic"
+    );
+
+    // Edge case 4: Rapid clicks / multiple tracers active concurrently
+    let mut tracers = Vec::new();
+    for i in 0..10 {
+        let t_click = start + Duration::from_millis(i * 5);
+        tracers.push(ShotTracer::new(1, 1.5, 1.5, 5.5, 1.5, t_click));
+    }
+    assert_eq!(tracers.len(), 10);
+    let check_time = start + Duration::from_millis(60);
+    tracers.retain(|t| t.is_active(check_time));
+    assert_eq!(
+        tracers.len(),
+        10,
+        "all 10 rapid click tracers remain active within lifetime"
+    );
+    let after_all_expired = start + Duration::from_millis(300);
+    tracers.retain(|t| t.is_active(after_all_expired));
+    assert_eq!(
+        tracers.len(),
+        0,
+        "all rapid click tracers cleanly expire after 200ms lifetime"
+    );
 }

@@ -185,7 +185,7 @@ cargo build --release
 # Run strict Clippy linter with warnings denied
 cargo clippy --all-targets -- -D warnings
 
-# Execute all unit tests and integration audit checks (98 tests)
+# Execute all unit tests and integration audit checks (100 tests)
 cargo test
 ```
 

@@ -120,10 +120,10 @@ pub(super) fn draw_with_effects(
         layout.map_height_px,
     ))?;
 
-    // Draw active shot tracers (monochrome lines)
+    // Draw active shot tracers (monochrome lines and moving projectile dot)
     for tracer in tracers {
         if tracer.progress(current_time).is_some() {
-            draw_shot_tracer(canvas, tracer, &layout)?;
+            draw_shot_tracer(canvas, tracer, &layout, current_time)?;
         }
     }
 
@@ -144,15 +144,30 @@ fn draw_shot_tracer(
     canvas: &mut Canvas<Window>,
     tracer: &ShotTracer,
     layout: &MinimapLayout,
+    current_time: Instant,
 ) -> Result<(), String> {
     let x1 = layout.origin_x + (tracer.from_x * layout.tile_pixels as f32).round() as i32;
     let y1 = layout.origin_y + (tracer.from_y * layout.tile_pixels as f32).round() as i32;
     let x2 = layout.origin_x + (tracer.to_x * layout.tile_pixels as f32).round() as i32;
     let y2 = layout.origin_y + (tracer.to_y * layout.tile_pixels as f32).round() as i32;
 
-    // Monochrome high-visibility white line
-    canvas.set_draw_color(Color::RGB(255, 255, 255));
+    // Laser beam trajectory line
+    canvas.set_draw_color(Color::RGB(180, 200, 220));
     canvas.draw_line(Point::new(x1, y1), Point::new(x2, y2))?;
+
+    // Bright moving projectile dot on minimap
+    if let Some(progress) = tracer.progress(current_time) {
+        let cur_x = layout.origin_x
+            + ((tracer.from_x + progress * (tracer.to_x - tracer.from_x))
+                * layout.tile_pixels as f32)
+                .round() as i32;
+        let cur_y = layout.origin_y
+            + ((tracer.from_y + progress * (tracer.to_y - tracer.from_y))
+                * layout.tile_pixels as f32)
+                .round() as i32;
+        canvas.set_draw_color(Color::RGB(255, 255, 255));
+        let _ = canvas.fill_rect(Rect::new(cur_x - 1, cur_y - 1, 3, 3));
+    }
     Ok(())
 }
 

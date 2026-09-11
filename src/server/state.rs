@@ -33,6 +33,7 @@ pub struct ServerState {
     tick: u32,
     maze: Maze,
     combat: CombatManager,
+    pending_combat_events: Vec<CombatEvent>,
 }
 
 impl ServerState {
@@ -43,6 +44,7 @@ impl ServerState {
             tick: 0,
             maze: Maze::level_one(),
             combat: CombatManager::new(),
+            pending_combat_events: Vec::new(),
         }
     }
 }
@@ -163,8 +165,14 @@ impl ServerState {
         player.last_seen_tick = self.tick;
         let pos = player.position;
         let dir = player.direction;
-        self.combat
-            .try_fire(player_id, pos, dir, &self.maze, self.tick)
+        let fired = self
+            .combat
+            .try_fire(player_id, pos, dir, &self.maze, self.tick);
+        if fired {
+            self.pending_combat_events
+                .extend(self.combat.drain_events());
+        }
+        fired
     }
 
     pub fn update(&mut self, elapsed_seconds: f32) {
@@ -212,8 +220,10 @@ impl ServerState {
                 )
             })
             .collect();
-        self.combat
-            .update(elapsed_seconds, &self.maze, &mut combat_players, self.tick);
+        let events =
+            self.combat
+                .update(elapsed_seconds, &self.maze, &mut combat_players, self.tick);
+        self.pending_combat_events.extend(events);
 
         let exit_reached = self.players.values().any(|player| {
             self.maze.is_exit(
@@ -259,7 +269,9 @@ impl ServerState {
     }
 
     pub fn drain_combat_events(&mut self) -> Vec<CombatEvent> {
-        self.combat.drain_events()
+        let mut events = std::mem::take(&mut self.pending_combat_events);
+        events.extend(self.combat.drain_events());
+        events
     }
 
     pub fn roster(&self) -> ServerMessage {

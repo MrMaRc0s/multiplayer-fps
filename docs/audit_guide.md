@@ -117,7 +117,7 @@ The client sends a binary UDP `ClientMessage::Join` datagram. The server validat
 - Client connection handshake & retry loop: `src/client.rs:162-231` (`connect`)
 - Friendly error message when server is offline: `src/client.rs:228-230`
 - Server join handling: `src/server.rs:108-121` and `src/server/state.rs:71-123`
-- Automated verification: `audit_check_unreachable_server_provides_friendly_error` in `tests/audit_tests.rs:168-193` and `audit_check_live_udp_server_process_and_12_clients` in `tests/audit_tests.rs:940-1000`
+- Automated verification: `audit_check_unreachable_server_provides_friendly_error` in `tests/audit_tests.rs:167-192` and `audit_check_live_udp_server_process_and_12_clients` in `tests/audit_tests.rs:949-1007`
 
 #### Live Demonstration Commands
 1. Start the server in terminal 1:
@@ -168,7 +168,7 @@ Upon successful join acceptance, the client initializes SDL2 video subsystems an
 #### Codebase References
 - Client GUI launcher: `src/bin/client.rs:29` calls `src/window.rs:18-41`
 - Window configuration: `src/window.rs:28-38`
-- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1003-1114`
+- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1017-1132`
 
 ---
 
@@ -285,8 +285,8 @@ The client utilizes a lightweight, zero-heap-allocation rendering pipeline:
 #### Codebase References
 - Server capacity: `src/server.rs:14` (`MAX_PLAYERS = 64`)
 - Inactivity eviction: `src/server/state.rs:12, 239-259` (`remove_inactive_players`)
-- 3-minute 12-client stress test: `tests/audit_tests.rs:741-801`
-- Live process 12-client test: `tests/audit_tests.rs:940-1000`
+- 3-minute 12-client stress test: `tests/audit_tests.rs:740-798`
+- Live process 12-client test: `tests/audit_tests.rs:949-1007`
 
 #### Live Demonstration Commands
 To demonstrate multiple simultaneous clients during peer review:
@@ -315,7 +315,7 @@ cargo test audit_check_multiplayer_capacity_and_10_plus_clients_stress_test -- -
 #### Codebase References
 - Non-blocking client socket: `src/client.rs:191`
 - Non-blocking update drain: `src/client.rs:73-126`
-- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1003-1114`
+- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1017-1132`
 
 ---
 
@@ -425,7 +425,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-### Step 2: Automated Audit Test Suite (98 Tests)
+### Step 2: Automated Audit Test Suite (100 Tests)
 ```bash
 # Run all unit and integration audit tests
 cargo test
@@ -482,6 +482,12 @@ cargo test audit_check_live_udp_server_process_and_12_clients
 
 # 17. GUI Rendering, Minimap, Scoreboard & Performance
 cargo test audit_check_client_gui_rendering_and_performance
+
+# 18. Combat Event Pipeline & Shot Delivery
+cargo test audit_check_combat_event_pipeline_and_shot_fired_delivery
+
+# 19. Firing Visuals, Projectile & Muzzle Flash
+cargo test audit_check_firing_visuals_projectile_and_muzzle_flash_rendered
 ```
 
 ### Step 3: Interactive Live Gameplay Demonstration

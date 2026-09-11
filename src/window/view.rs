@@ -544,6 +544,94 @@ fn draw_shot_tracer(
         ))?;
     }
 
+    // Project and render the traveling projectile pulse
+    let cur_x = tracer.from_x + progress * (tracer.to_x - tracer.from_x);
+    let cur_y = tracer.from_y + progress * (tracer.to_y - tracer.from_y);
+
+    let diff_x = cur_x - ctx.observer.x;
+    let diff_y = cur_y - ctx.observer.y;
+    let forward_x = ctx.observer.direction.cos();
+    let forward_y = ctx.observer.direction.sin();
+    let depth = diff_x * forward_x + diff_y * forward_y;
+
+    if depth > NEAR_PLANE {
+        let sideways = -diff_x * forward_y + diff_y * forward_x;
+        let center_x = ctx.screen_width as f32 / 2.0 + (sideways / depth) * ctx.projection_distance;
+        let center_y = ctx.screen_height as f32 / 2.0;
+
+        let col = (center_x.round() as i32).clamp(0, ctx.screen_width as i32 - 1) as usize;
+        let wall_dist = if col < ctx.wall_depth.len() {
+            ctx.wall_depth[col]
+        } else {
+            f32::INFINITY
+        };
+
+        if depth < wall_dist + 0.25
+            && center_x >= -50.0
+            && center_x < ctx.screen_width as f32 + 50.0
+        {
+            let size = ((ctx.projection_distance / depth) * 0.22).clamp(8.0, 48.0);
+            let half = size / 2.0;
+
+            // Outer energy glow (phosphor cyan-white)
+            canvas.set_draw_color(Color::RGB(160, 220, 255));
+            let _ = canvas.fill_rect(Rect::new(
+                (center_x - half - 2.0).round() as i32,
+                (center_y - half - 2.0).round() as i32,
+                (size + 4.0).round() as u32,
+                (size + 4.0).round() as u32,
+            ));
+
+            // Bright pure-white core
+            canvas.set_draw_color(Color::RGB(255, 255, 255));
+            let _ = canvas.fill_rect(Rect::new(
+                (center_x - half).round() as i32,
+                (center_y - half).round() as i32,
+                size.round() as u32,
+                size.round() as u32,
+            ));
+
+            // Cross flare lines
+            let flare = size * 1.4;
+            let _ = canvas.draw_line(
+                Point::new((center_x - flare).round() as i32, center_y.round() as i32),
+                Point::new((center_x + flare).round() as i32, center_y.round() as i32),
+            );
+            let _ = canvas.draw_line(
+                Point::new(center_x.round() as i32, (center_y - flare).round() as i32),
+                Point::new(center_x.round() as i32, (center_y + flare).round() as i32),
+            );
+        }
+    }
+
+    // Muzzle flash vectors when local player shoots
+    if tracer.shooter_id == ctx.observer.id && progress < 0.45 {
+        let alpha = (1.0 - progress / 0.45).clamp(0.0, 1.0);
+        let flash_val = (alpha * 255.0).round() as u8;
+        canvas.set_draw_color(Color::RGB(flash_val, flash_val, flash_val));
+        let bottom_y = ctx.screen_height as i32;
+        let beam_l = (ctx.screen_width as f32 * 0.2).round() as i32;
+        let beam_r = (ctx.screen_width as f32 * 0.8).round() as i32;
+        let cx = (ctx.screen_width / 2) as i32;
+        let cy = (ctx.screen_height / 2) as i32;
+        let _ = canvas.draw_line(Point::new(beam_l, bottom_y), Point::new(cx - 2, cy));
+        let _ = canvas.draw_line(Point::new(beam_l + 1, bottom_y), Point::new(cx - 1, cy));
+        let _ = canvas.draw_line(Point::new(beam_r, bottom_y), Point::new(cx + 2, cy));
+        let _ = canvas.draw_line(Point::new(beam_r - 1, bottom_y), Point::new(cx + 1, cy));
+
+        let tick_len = (16.0 * alpha).round() as i32 + 4;
+        let _ = canvas.draw_line(Point::new(cx - tick_len, cy), Point::new(cx + tick_len, cy));
+        let _ = canvas.draw_line(Point::new(cx, cy - tick_len), Point::new(cx, cy + tick_len));
+        let _ = canvas.draw_line(
+            Point::new(cx - tick_len / 2, cy - tick_len / 2),
+            Point::new(cx + tick_len / 2, cy + tick_len / 2),
+        );
+        let _ = canvas.draw_line(
+            Point::new(cx - tick_len / 2, cy + tick_len / 2),
+            Point::new(cx + tick_len / 2, cy - tick_len / 2),
+        );
+    }
+
     Ok(())
 }
 

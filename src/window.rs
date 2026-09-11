@@ -1,6 +1,7 @@
 use crate::client::{Connection, WorldSnapshot};
 use crate::protocol::CombatEventKind;
-use crate::world::Maze;
+use crate::server::combat;
+use crate::world::{Maze, Position};
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Scancode};
 use sdl2::mouse::MouseButton;
@@ -54,6 +55,13 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
         let now = Instant::now();
         fps_tracker.record_frame(now);
 
+        let own_snapshot = latest_snapshot.as_ref().and_then(|s| {
+            s.players
+                .iter()
+                .find(|p| p.id == connection.player_id())
+                .copied()
+        });
+
         for event in events.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -72,6 +80,30 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
                 } => {
                     fire_sequence = fire_sequence.wrapping_add(1);
                     connection.send_fire(fire_sequence)?;
+                    if let Some(player) = own_snapshot {
+                        let to_x = player.x + player.direction.cos() * 50.0;
+                        let to_y = player.y + player.direction.sin() * 50.0;
+                        let start = Position {
+                            x: player.x,
+                            y: player.y,
+                        };
+                        let max_target = Position { x: to_x, y: to_y };
+                        let hit_end = if let Some((_, hit)) =
+                            combat::swept_wall_collision(&maze, start, max_target)
+                        {
+                            (hit.x, hit.y)
+                        } else {
+                            (to_x, to_y)
+                        };
+                        shot_tracers.push(view::ShotTracer::new(
+                            connection.player_id(),
+                            player.x,
+                            player.y,
+                            hit_end.0,
+                            hit_end.1,
+                            now,
+                        ));
+                    }
                 }
                 _ => {}
             }
@@ -112,9 +144,15 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
                     to_x,
                     to_y,
                 } => {
-                    shot_tracers.push(view::ShotTracer::new(
-                        shooter_id, from_x, from_y, to_x, to_y, now,
-                    ));
+                    let already_has = shooter_id == connection.player_id()
+                        && shot_tracers
+                            .iter()
+                            .any(|t| t.shooter_id == shooter_id && t.is_active(now));
+                    if !already_has {
+                        shot_tracers.push(view::ShotTracer::new(
+                            shooter_id, from_x, from_y, to_x, to_y, now,
+                        ));
+                    }
                 }
                 CombatEventKind::PlayerHit {
                     shooter_id,

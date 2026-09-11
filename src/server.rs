@@ -2,6 +2,7 @@ use self::state::ServerState;
 use crate::protocol::{
     ClientMessage, CombatEventKind, MAX_PACKET_SIZE, ServerMessage, decode_client, encode_server,
 };
+use crate::world::Position;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::thread;
@@ -56,16 +57,29 @@ pub fn run() -> io::Result<()> {
                         shooter_id,
                         position,
                         direction,
-                    } => ServerMessage::CombatEvent {
-                        sequence: event_id,
-                        kind: CombatEventKind::ShotFired {
-                            shooter_id,
-                            from_x: position.x,
-                            from_y: position.y,
-                            to_x: position.x + direction.cos() * 20.0,
-                            to_y: position.y + direction.sin() * 20.0,
-                        },
-                    },
+                    } => {
+                        let max_end = Position {
+                            x: position.x + direction.cos() * 50.0,
+                            y: position.y + direction.sin() * 50.0,
+                        };
+                        let hit_pos = if let Some((_, hit)) =
+                            combat::swept_wall_collision(state.maze(), position, max_end)
+                        {
+                            hit
+                        } else {
+                            max_end
+                        };
+                        ServerMessage::CombatEvent {
+                            sequence: event_id,
+                            kind: CombatEventKind::ShotFired {
+                                shooter_id,
+                                from_x: position.x,
+                                from_y: position.y,
+                                to_x: hit_pos.x,
+                                to_y: hit_pos.y,
+                            },
+                        }
+                    }
                     combat::CombatEvent::PlayerHit {
                         event_id,
                         shooter_id,
