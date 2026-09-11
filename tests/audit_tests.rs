@@ -17,7 +17,7 @@ use maze_wars::window::minimap::{
 use maze_wars::window::view::{
     CombatVisuals, DAMAGE_FEEDBACK_LIFETIME, HIT_CONFIRMATION_LIFETIME, SHOT_TRACER_LIFETIME,
     ShotTracer, cast_ray, clip_segment_near, correct_fish_eye, is_blink_visible, project_player,
-    wall_brightness,
+    projectile_screen_size, wall_brightness,
 };
 use maze_wars::world::{Maze, Position, Tile};
 use sdl2::pixels::Color;
@@ -26,18 +26,29 @@ use std::net::{SocketAddr, UdpSocket};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-// 1. `audit_check_compiles_and_lints_without_warnings`: build verification.
+// 1. `audit_check_compiles_and_lints_without_warnings`: build verification with strict warning denial.
 #[test]
 fn audit_check_compiles_and_lints_without_warnings() {
-    let output = Command::new("cargo")
+    let check = Command::new("cargo")
         .args(["check", "--all-targets"])
         .output()
         .expect("failed to execute cargo check");
 
     assert!(
-        output.status.success(),
+        check.status.success(),
         "cargo check --all-targets failed with:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let clippy = Command::new("cargo")
+        .args(["clippy", "--all-targets", "--", "-D", "warnings"])
+        .output()
+        .expect("failed to execute cargo clippy");
+
+    assert!(
+        clippy.status.success(),
+        "cargo clippy --all-targets -- -D warnings failed with:\n{}",
+        String::from_utf8_lossy(&clippy.stderr)
     );
 }
 
@@ -112,6 +123,16 @@ fn audit_check_client_asks_for_ip_and_username_and_validates() {
     assert_eq!(
         parse_server_address("127.0.0.1:34254").unwrap(),
         "127.0.0.1:34254".parse::<SocketAddr>().unwrap()
+    );
+    assert_eq!(
+        parse_server_address("127.0.0.1").unwrap(),
+        "127.0.0.1:34254".parse::<SocketAddr>().unwrap(),
+        "IP without port must default to port 34254"
+    );
+    assert_eq!(
+        parse_server_address("10.0.0.5").unwrap(),
+        "10.0.0.5:34254".parse::<SocketAddr>().unwrap(),
+        "remote IP without port must default to port 34254"
     );
     assert_eq!(
         parse_server_address("192.168.1.15:12345").unwrap(),
@@ -349,6 +370,25 @@ fn audit_check_fps_counter_displayed_and_above_50_fps() {
     }
     assert!(tracker.fps() > 50);
 
+    // Live raycasting computational throughput benchmark (480 columns)
+    let bench_maze = Maze::level_one();
+    let observer_pos = Position { x: 1.5, y: 1.5 };
+    let fov = 60.0_f32.to_radians();
+    let start_time = Instant::now();
+    let num_frames = 60;
+    for _ in 0..num_frames {
+        for col in 0..480 {
+            let ray_angle = -fov / 2.0 + (col as f32 / 480.0) * fov;
+            let _ = cast_ray(&bench_maze, observer_pos, ray_angle);
+        }
+    }
+    let total_time = start_time.elapsed();
+    let avg_frame_ms = total_time.as_secs_f64() * 1000.0 / num_frames as f64;
+    assert!(
+        avg_frame_ms < 10.0,
+        "60 frames of full-screen raycasting must compute in < 10ms per frame (> 100 FPS), took {avg_frame_ms:.2} ms"
+    );
+
     // Verify HUD text formatting includes FPS and Level
     let mut buf = [0_u8; 64];
     let hud_text = format_hud_string(&mut buf, tracker.fps(), Some(2));
@@ -420,6 +460,38 @@ fn audit_check_three_levels_increasing_difficulty_and_dead_ends() {
             maze.can_occupy(maze.exit(), 0.2),
             "Level {level_idx} exit {:?} must be walkable",
             maze.exit()
+        );
+
+        // Reachability: path from spawn to exit exists via BFS flood fill
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        let start_tile = (maze.spawn().x.floor() as i32, maze.spawn().y.floor() as i32);
+        let exit_tile = (maze.exit().x.floor() as i32, maze.exit().y.floor() as i32);
+        queue.push_back(start_tile);
+        visited.insert(start_tile);
+        let mut reachable = false;
+        while let Some((cx, cy)) = queue.pop_front() {
+            if (cx, cy) == exit_tile {
+                reachable = true;
+                break;
+            }
+            for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+                let nx = cx + dx;
+                let ny = cy + dy;
+                if nx >= 0
+                    && nx < w as i32
+                    && ny >= 0
+                    && ny < h as i32
+                    && maze.tile(nx, ny) != Tile::Wall
+                    && visited.insert((nx, ny))
+                {
+                    queue.push_back((nx, ny));
+                }
+            }
+        }
+        assert!(
+            reachable,
+            "Level {level_idx} exit must be fully reachable from spawn point"
         );
     }
 
@@ -583,6 +655,27 @@ fn audit_check_authoritative_combat_straight_shots_and_wall_blocking() {
     assert!(
         (hit_pos.x - 1.0).abs() < 0.001,
         "shot must stop exactly at the wall boundary"
+    );
+
+    // Live ServerState test: target positioned behind a solid wall cannot be hit
+    let a4: SocketAddr = "127.0.0.1:30004".parse().unwrap();
+    state.join(a4, "target_behind_wall".to_string());
+    // Move shooter to (3.5, 1.5) and target to (3.5, 3.5); wall is at y = 2.0
+    state.set_player_position(1, Position { x: 3.5, y: 1.5 });
+    state.set_player_direction(1, std::f32::consts::PI / 2.0); // Facing South
+    state.set_player_position(4, Position { x: 3.5, y: 3.5 });
+
+    // Tick past fire cooldown
+    for _ in 0..20 {
+        state.update(1.0 / 60.0);
+    }
+    assert!(state.apply_fire(a1, 1, 2));
+    state.update(0.2); // Let projectile travel down into the wall
+
+    assert_eq!(
+        state.score(4),
+        0,
+        "target behind wall must NOT be hit through the wall inside ServerState"
     );
 }
 
@@ -773,6 +866,7 @@ fn audit_check_multiplayer_capacity_and_10_plus_clients_stress_test() {
         }
 
         state.update(1.0 / 60.0);
+        let _events = state.drain_combat_events();
 
         // Server generates snapshot
         let snapshot = state.snapshot();
@@ -980,18 +1074,18 @@ fn audit_check_live_udp_server_process_and_12_clients() {
     // Wait for server tick (60 Hz = ~16.6ms) to process inputs and broadcast
     std::thread::sleep(Duration::from_millis(80));
 
-    // Each client receives network updates containing 12 players
     // Each client receives network updates containing 12 players and combat events
     let mut total_shot_events = 0;
     for conn in &mut clients {
         let updates = conn.receive_updates().expect("receive updates failed");
-        if let Some(snapshot) = updates.snapshot {
-            assert_eq!(
-                snapshot.players.len(),
-                12,
-                "snapshot must contain all 12 live players"
-            );
-        }
+        let snapshot = updates
+            .snapshot
+            .expect("client must receive authoritative snapshot from server");
+        assert_eq!(
+            snapshot.players.len(),
+            12,
+            "snapshot must contain all 12 live players"
+        );
         total_shot_events += updates.combat_events.len();
     }
     assert!(
@@ -1219,12 +1313,17 @@ fn audit_check_firing_visuals_projectile_and_muzzle_flash_rendered() {
 
     // Projectile screen size decreases inversely with depth (perspective scaling)
     let proj_dist: f32 = 800.0;
-    let size_near = ((proj_dist / 1.0_f32) * 0.22_f32).clamp(8.0_f32, 48.0_f32);
-    let size_far = ((proj_dist / 4.0_f32) * 0.22_f32).clamp(8.0_f32, 48.0_f32);
+    let size_near = projectile_screen_size(proj_dist, 1.0);
+    let size_far = projectile_screen_size(proj_dist, 4.0);
     assert!(
         size_near > size_far,
         "projectile size must scale down with distance"
     );
+    assert_eq!(
+        size_near, 48.0,
+        "near projectile should clamp at maximum 48px"
+    );
+    assert_eq!(size_far, 44.0, "far projectile scales down with depth");
 
     // Expiry after duration
     let p_expired = ShotTracer::progress_from_elapsed(Duration::from_millis(250), tracer.duration);

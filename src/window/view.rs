@@ -571,6 +571,7 @@ fn draw_shot_tracer(
             && center_x < ctx.screen_width as f32 + 50.0
         {
             let size = ((ctx.projection_distance / depth) * 0.22).clamp(8.0, 48.0);
+            let size = projectile_screen_size(ctx.projection_distance, depth);
             let half = size / 2.0;
 
             // Outer energy glow (phosphor cyan-white)
@@ -755,6 +756,11 @@ pub fn should_blink(now: Instant) -> bool {
     let epoch = *EPOCH.get_or_init(Instant::now);
     let elapsed = now.duration_since(epoch);
     is_blink_visible(elapsed, BLINK_CYCLE_MS)
+}
+
+#[inline]
+pub fn projectile_screen_size(projection_distance: f32, depth: f32) -> f32 {
+    ((projection_distance / depth.max(0.001)) * 0.22).clamp(8.0, 48.0)
 }
 
 #[cfg(test)]

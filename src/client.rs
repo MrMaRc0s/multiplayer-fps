@@ -134,8 +134,12 @@ pub fn parse_server_address(input: &str) -> Result<SocketAddr, String> {
     let trimmed = input.trim();
     let address = if trimmed.is_empty() {
         DEFAULT_SERVER_ADDRESS
+        DEFAULT_SERVER_ADDRESS.to_string()
+    } else if !trimmed.contains(':') {
+        format!("{trimmed}:34254")
     } else {
         trimmed
+        trimmed.to_string()
     };
 
     address
