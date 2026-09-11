@@ -2,7 +2,7 @@
 
 ## Control instructions
 
-- Project root: `/home/cgaldan/Projects/multiplayer-fps`
+- Project root: .
 - Remote: `https://platform.zone01.gr/git/cgkaldan/multiplayer-fps.git`
 - Starting commit: `99afaba` (`feat: render other players in first-person view`)
 - Starting branch: `main`, synchronized with `origin/main`

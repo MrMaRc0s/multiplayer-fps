@@ -36,6 +36,12 @@ Install `sdl2` via [vcpkg](https://github.com/microsoft/vcpkg) (`vcpkg install s
 
 ## Building & Running
 
+Ensure your terminal is navigated to the project directory containing `Cargo.toml`:
+```bash
+# Navigate to the project root
+cd multiplayer-fps-1
+```
+
 ### 1. Start the Game Server
 The server binds to UDP port `34254` across all interfaces (`0.0.0.0`):
 ```bash
@@ -179,9 +185,11 @@ cargo build --release
 # Run strict Clippy linter with warnings denied
 cargo clippy --all-targets -- -D warnings
 
-# Execute all unit tests and integration audit checks (96 tests)
+# Execute all unit tests and integration audit checks (98 tests)
 cargo test
 ```
+
+For the complete peer audit evaluation guide, question-by-question explanations, and deep-dive technical defenses, see [`docs/audit_guide.md`](docs/audit_guide.md) and [`docs/audit.md`](docs/audit.md).
 
 ---
 
