@@ -5,8 +5,7 @@ use sdl2::rect::{Point, Rect};
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 use std::f32::consts::PI;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const FIELD_OF_VIEW: f32 = PI / 3.0;
 const COLUMN_WIDTH: usize = 2;
@@ -355,13 +354,13 @@ fn draw_eye_sprite(
         }
 
         let sclera_color = if is_protected && blink_phase {
-            // Bright shield flash
+            // Bright shield flash (monochrome white)
             Color::RGB(255, 255, 255)
         } else if is_protected {
-            // Inverted/dim protective glow
-            Color::RGB(80, 160, 220)
+            // Dim protective gray (monochrome, subtle blink)
+            Color::RGB(110, 110, 110)
         } else {
-            Color::RGB(225, 225, 215)
+            Color::RGB(225, 225, 225)
         };
 
         canvas.set_draw_color(sclera_color);
@@ -374,11 +373,13 @@ fn draw_eye_sprite(
 
         if normalized_x.abs() < 0.23 {
             let pupil_color = if is_protected && blink_phase {
-                Color::RGB(255, 220, 50)
+                // Inverted black pupil on white flash (monochrome blink/invert)
+                Color::RGB(0, 0, 0)
             } else if is_protected {
                 Color::RGB(240, 240, 240)
             } else {
-                Color::RGB(190, 35, 35)
+                // Monochrome near-black pupil
+                Color::RGB(20, 20, 20)
             };
 
             canvas.set_draw_color(pupil_color);
@@ -566,15 +567,12 @@ fn draw_shot_tracer(
             f32::INFINITY
         };
 
-        if depth < wall_dist + 0.25
-            && center_x >= -50.0
-            && center_x < ctx.screen_width as f32 + 50.0
-        {
+        if depth < wall_dist && center_x >= -50.0 && center_x < ctx.screen_width as f32 + 50.0 {
             let size = projectile_screen_size(ctx.projection_distance, depth);
             let half = size / 2.0;
 
-            // Outer energy glow (phosphor cyan-white)
-            canvas.set_draw_color(Color::RGB(160, 220, 255));
+            // Outer monochrome glow (same brightness fade as the beam)
+            canvas.set_draw_color(Color::RGB(brightness, brightness, brightness));
             let _ = canvas.fill_rect(Rect::new(
                 (center_x - half - 2.0).round() as i32,
                 (center_y - half - 2.0).round() as i32,
@@ -750,11 +748,39 @@ pub fn is_blink_visible(elapsed: Duration, cycle_ms: u128) -> bool {
     (elapsed.as_millis() / cycle_ms).is_multiple_of(2)
 }
 
+/// Deterministic blink phase given a caller-provided start.
+/// Pure function of `(start, now)`; returns the visible phase when `now < start`
+/// instead of panicking so stale snapshots never crash rendering.
+pub fn should_blink_since(start: Instant, now: Instant) -> bool {
+    if now < start {
+        return true;
+    }
+    is_blink_visible(now.duration_since(start), BLINK_CYCLE_MS)
+}
+
+/// Frame blink phase for the caller-provided `now`.
+///
+/// No process-local epoch: `now` is mapped to wall-clock time so all processes
+/// blink in sync instead of depending on first-call (process-start) time.
+/// Prefer `should_blink_since` with a caller-provided start (e.g. match start
+/// or snapshot tick) where a fully deterministic, testable phase is needed;
+/// this wrapper keeps the existing `Instant -> bool` signature used by
+/// `minimap.rs` (single-file fix, callers untouched).
 pub fn should_blink(now: Instant) -> bool {
-    static EPOCH: OnceLock<Instant> = OnceLock::new();
-    let epoch = *EPOCH.get_or_init(Instant::now);
-    let elapsed = now.duration_since(epoch);
-    is_blink_visible(elapsed, BLINK_CYCLE_MS)
+    let instant_now = Instant::now();
+    let Ok(unix_now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return true;
+    };
+    let now_unix_millis = if now <= instant_now {
+        unix_now
+            .as_millis()
+            .saturating_sub(instant_now.duration_since(now).as_millis())
+    } else {
+        unix_now
+            .as_millis()
+            .saturating_add(now.duration_since(instant_now).as_millis())
+    };
+    (now_unix_millis / BLINK_CYCLE_MS).is_multiple_of(2)
 }
 
 #[inline]

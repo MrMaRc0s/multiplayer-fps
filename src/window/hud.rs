@@ -30,9 +30,12 @@ impl FpsTracker {
     }
 
     /// Records a rendered frame with the elapsed real time since the previous tick.
+    /// The first call only arms the timestamp, so [`Self::fps`] stays `0` until
+    /// the first measurement window completes (startup shows `FPS: 0` by design).
+    /// Out-of-order timestamps never panic (saturating, zero elapsed).
     pub fn record_frame(&mut self, now: Instant) {
         if let Some(previous) = self.last_update {
-            let elapsed = now.duration_since(previous);
+            let elapsed = now.saturating_duration_since(previous);
             self.advance(elapsed);
         }
         self.last_update = Some(now);
@@ -49,10 +52,14 @@ impl FpsTracker {
                 self.displayed_fps = (self.frame_count as f64 / seconds).round() as u32;
             }
             self.frame_count = 0;
-            self.elapsed_accumulated = Duration::ZERO;
+            // Carry the overshoot remainder into the next window instead of
+            // discarding it, keeping the long-term rate stable across boundaries.
+            self.elapsed_accumulated -= self.window_duration;
         }
     }
 
+    /// Returns the last completed window's FPS.
+    /// Returns `0` until the first measurement window completes (see [`Self::record_frame`]).
     pub fn fps(&self) -> u32 {
         self.displayed_fps
     }
@@ -88,19 +95,58 @@ pub fn sort_scoreboard(entries: &mut [ScoreboardEntry<'_>]) {
     entries.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| a.id.cmp(&b.id)));
 }
 
+/// Decimal digit count of an `i32` (including `-` sign), without allocation.
+fn decimal_len_i32(value: i32) -> usize {
+    if value == 0 {
+        return 1;
+    }
+    let mut len = 0_usize;
+    let mut n = value as i64;
+    if n < 0 {
+        len += 1;
+        n = -n;
+    }
+    while n > 0 {
+        len += 1;
+        n /= 10;
+    }
+    len
+}
+
 /// Formats a scoreboard line as `USERNAME: SCORE` (or `P<id>: SCORE` if unknown),
 /// highlighting the local player with a `* ` prefix when `is_local` is true.
+/// Overlong names are truncated with a `...` ellipsis so the result always fits
+/// `buffer` instead of being silently cut mid-score. Stack buffer only, no allocation.
 pub fn format_scoreboard_entry<'a>(
     buffer: &'a mut [u8],
     entry: &ScoreboardEntry<'_>,
     is_local: bool,
 ) -> &'a str {
     use std::io::Write;
+    let capacity = buffer.len();
     let mut cursor = std::io::Cursor::new(&mut buffer[..]);
     let prefix = if is_local { "* " } else { "" };
     match entry.username {
         Some(name) if !name.trim().is_empty() => {
-            let _ = write!(cursor, "{prefix}{}: {}", name.trim(), entry.score);
+            let name = name.trim();
+            let prefix_len = prefix.len();
+            let overhead = prefix_len + 2 + decimal_len_i32(entry.score);
+            if name.len() + overhead <= capacity {
+                let _ = write!(cursor, "{prefix}{}: {}", name, entry.score);
+            } else if let Some(avail) = capacity.checked_sub(overhead)
+                && avail > 3
+            {
+                // Truncate the name (not the score) and mark it with an ellipsis.
+                let mut trunc = avail - 3;
+                while trunc > 0 && !name.is_char_boundary(trunc) {
+                    trunc -= 1;
+                }
+                let short = &name[..trunc];
+                let _ = write!(cursor, "{prefix}{short}...: {}", entry.score);
+            } else {
+                // Buffer too small even for an ellipsis; best-effort truncated write.
+                let _ = write!(cursor, "{prefix}{}: {}", name, entry.score);
+            }
         }
         _ => {
             let _ = write!(cursor, "{prefix}P{}: {}", entry.id, entry.score);
@@ -153,9 +199,11 @@ pub fn draw_fps_and_level(
     let text_height = GLYPH_HEIGHT * scale;
     let padding = 8;
 
-    let box_width = (text_width + padding * 2) as u32;
+    // Clamp the card to the window so narrow windows never overflow.
+    let max_box_width = window_width.saturating_sub((margin * 2) as u32).max(1);
+    let box_width = ((text_width + padding * 2) as u32).min(max_box_width);
     let box_height = (text_height + padding * 2) as u32;
-    let box_x = (window_width as i32) - (box_width as i32) - margin;
+    let box_x = ((window_width as i32) - (box_width as i32) - margin).max(0);
     let box_y = margin;
 
     // Semi-transparent dark background card
@@ -241,13 +289,29 @@ pub fn draw_scoreboard(
     }
 
     let text_width = (max_chars as i32) * (GLYPH_WIDTH + CHAR_SPACING) * scale;
-    let box_width = (text_width + padding * 2) as u32;
+    // Clip the card to the window so overlong entries can never overflow it.
+    let max_box_width = window_width.saturating_sub((margin * 2) as u32).max(1);
+    let box_width = ((text_width + padding * 2) as u32).min(max_box_width);
     let content_height = (display_count as i32) * line_height - line_spacing;
     let box_height = (content_height + padding * 2) as u32;
 
-    // Centered at the top, leaving central first-person view completely unobstructed
-    let box_x = ((window_width as i32 - box_width as i32) / 2).max(margin);
-    let box_y = margin;
+    // Centered at the top, leaving central first-person view completely unobstructed.
+    // Overlap guard: on narrow windows the centered scoreboard would run into the
+    // top-right FPS card, so shift it left to stay clear, and if horizontal room
+    // is exhausted, drop it below the FPS card instead of overlapping it.
+    let centered_x = ((window_width as i32 - box_width as i32) / 2).max(margin);
+    // Conservative width reserved for the top-right FPS/level card plus a gap.
+    let fps_reserve = 16 * (GLYPH_WIDTH + CHAR_SPACING) * 3 + 16 + margin + 8;
+    let rightmost_x = (window_width as i32 - margin - fps_reserve - box_width as i32).max(margin);
+    let box_x = centered_x.min(rightmost_x);
+    let mut box_y = margin;
+    let fps_card_height = GLYPH_HEIGHT * 3 + padding * 2;
+    if box_x + box_width as i32 > window_width as i32 - margin - fps_reserve
+        && rightmost_x <= margin
+    {
+        // No horizontal room left even when left-aligned: stack below FPS card.
+        box_y = margin + fps_card_height + 8;
+    }
 
     // Semi-transparent dark background card
     canvas.set_draw_color(Color::RGBA(10, 15, 20, 210));
@@ -358,8 +422,17 @@ pub const fn glyph_bitmap(c: u8) -> [u8; 5] {
         b'*' => [0b000, 0b101, 0b111, 0b101, 0b000],
         b'[' => [0b110, 0b100, 0b100, 0b100, 0b110],
         b']' => [0b011, 0b001, 0b001, 0b001, 0b011],
+        // Legal username punctuation: trivial 3x5 glyphs so names stay readable.
+        b'_' => [0b000, 0b000, 0b000, 0b000, 0b111],
+        b'.' => [0b000, 0b000, 0b000, 0b000, 0b010],
+        b'/' => [0b001, 0b001, 0b010, 0b100, 0b100],
+        b',' => [0b000, 0b000, 0b000, 0b010, 0b100],
+        b'!' => [0b010, 0b010, 0b010, 0b000, 0b010],
+        b'?' => [0b111, 0b001, 0b010, 0b000, 0b010],
 
-        _ => [0b000, 0b000, 0b000, 0b000, 0b000],
+        // Visible placeholder (never blank) so any other legal character
+        // still renders instead of silently advancing the cursor.
+        _ => [0b111, 0b001, 0b010, 0b000, 0b010],
     }
 }
 

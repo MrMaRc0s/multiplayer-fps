@@ -118,9 +118,11 @@ The game features three static ASCII mazes of strictly increasing difficulty:
 
 | Level | Dimensions | Dead Ends | Complexity & Layout |
 |:-----:|:----------:|:---------:|---------------------|
-| **1** | 15 × 11 | 4 | Open central corridors, simple dead ends |
-| **2** | 21 × 15 | 12 | Branched corridors, tight turns, increased dead ends |
-| **3** | 25 × 19 | 21 | Dense labyrinth with maximum dead ends |
+| **1** | 15 × 11 | 1 | Open central corridors, simple dead ends |
+| **2** | 21 × 15 | 6 | Branched corridors, tight turns, increased dead ends |
+| **3** | 25 × 19 | 17 | Dense labyrinth with maximum dead ends |
+
+Dead-end counts are produced by `Maze::count_dead_ends` (interior floor/exit tiles with ≥3 wall neighbours; exit-alcove counts).
 
 - **Exit Progression**: Reaching the exit tile (`E`) immediately triggers an authoritative level transition (`1 -> 2 -> 3 -> 1`).
 - **Spawns**: Each maze defines multiple distinct spawn points (5 in Level 1, 6 in Level 2, 8 in Level 3) to prevent initial overlap.

@@ -15,6 +15,47 @@ pub mod view;
 const WINDOW_WIDTH: u32 = 960;
 const WINDOW_HEIGHT: u32 = 600;
 const INPUT_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
+const MAX_SHOT_TRACERS: usize = 32;
+
+/// Push a tracer while keeping the buffer bounded at [`MAX_SHOT_TRACERS`].
+/// Drops the oldest tracer when full so rapid fire stays visible but bounded.
+fn push_shot_tracer(tracers: &mut Vec<view::ShotTracer>, tracer: view::ShotTracer) {
+    while tracers.len() >= MAX_SHOT_TRACERS {
+        tracers.remove(0);
+    }
+    tracers.push(tracer);
+}
+
+/// Reconcile an authoritative `ShotFired` with the local prediction.
+///
+/// Keeps immediate local feedback (predictive tracers are pushed on fire),
+/// but the authoritative echo corrects the display: for the local shooter,
+/// expire one matching active predictive tracer (oldest first, FIFO so N
+/// rapid clicks reconcile to N authoritative segments) and push the
+/// authoritative segment. Remote shooters are pushed directly.
+#[allow(clippy::too_many_arguments)]
+fn apply_authoritative_shot(
+    tracers: &mut Vec<view::ShotTracer>,
+    shooter_id: u32,
+    local_player_id: u32,
+    from_x: f32,
+    from_y: f32,
+    to_x: f32,
+    to_y: f32,
+    now: Instant,
+) {
+    if shooter_id == local_player_id
+        && let Some(index) = tracers
+            .iter()
+            .position(|t| t.shooter_id == shooter_id && t.is_active(now))
+    {
+        tracers.remove(index);
+    }
+    push_shot_tracer(
+        tracers,
+        view::ShotTracer::new(shooter_id, from_x, from_y, to_x, to_y, now),
+    );
+}
 
 pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
     let sdl = sdl2::init().map_err(|error| format!("could not initialize SDL: {error}"))?;
@@ -47,7 +88,7 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
     let mut last_input = Instant::now();
     let mut fps_tracker = hud::FpsTracker::default();
     let mut roster: HashMap<u32, String> = HashMap::new();
-    let mut shot_tracers: Vec<view::ShotTracer> = Vec::with_capacity(32);
+    let mut shot_tracers: Vec<view::ShotTracer> = Vec::with_capacity(MAX_SHOT_TRACERS);
     let mut hit_confirmation_until: Option<Instant> = None;
     let mut damage_feedback_until: Option<Instant> = None;
 
@@ -95,14 +136,17 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
                         } else {
                             (to_x, to_y)
                         };
-                        shot_tracers.push(view::ShotTracer::new(
-                            connection.player_id(),
-                            player.x,
-                            player.y,
-                            hit_end.0,
-                            hit_end.1,
-                            now,
-                        ));
+                        push_shot_tracer(
+                            &mut shot_tracers,
+                            view::ShotTracer::new(
+                                connection.player_id(),
+                                player.x,
+                                player.y,
+                                hit_end.0,
+                                hit_end.1,
+                                now,
+                            ),
+                        );
                     }
                 }
                 _ => {}
@@ -144,15 +188,16 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
                     to_x,
                     to_y,
                 } => {
-                    let already_has = shooter_id == connection.player_id()
-                        && shot_tracers
-                            .iter()
-                            .any(|t| t.shooter_id == shooter_id && t.is_active(now));
-                    if !already_has {
-                        shot_tracers.push(view::ShotTracer::new(
-                            shooter_id, from_x, from_y, to_x, to_y, now,
-                        ));
-                    }
+                    apply_authoritative_shot(
+                        &mut shot_tracers,
+                        shooter_id,
+                        connection.player_id(),
+                        from_x,
+                        from_y,
+                        to_x,
+                        to_y,
+                        now,
+                    );
                 }
                 CombatEventKind::PlayerHit {
                     shooter_id,

@@ -110,10 +110,20 @@ impl CombatManager {
         self.scores.insert(player_id, score);
     }
 
+    /// Drops in-flight shots. Used on level transition: shots carry old-maze
+    /// coordinates and must not be evaluated against the new maze geometry.
+    pub fn clear_shots(&mut self) {
+        self.shots.clear();
+    }
+
     pub fn remove_player(&mut self, player_id: u32) {
         self.last_fire_tick.remove(&player_id);
         self.hit_protection.remove(&player_id);
         self.scores.remove(&player_id);
+        // Drop the departed player's in-flight shots so they can neither hit
+        // vs a later maze with stale coordinates nor resurrect the pruned
+        // score entry when a stale shot later connects.
+        self.shots.retain(|shot| shot.shooter_id != player_id);
     }
 
     pub fn try_fire(
@@ -184,6 +194,9 @@ impl CombatManager {
         for (&id, player) in players.iter() {
             self.scores.entry(id).or_insert(player.score);
         }
+        // Finding #8: prune departed IDs so stale shots cannot resurrect them
+        // via or_insert/insert below.
+        self.scores.retain(|id, _| players.contains_key(id));
 
         let step_distance = SHOT_SPEED * dt;
         let mut surviving_shots = Vec::with_capacity(self.shots.len());
@@ -223,6 +236,12 @@ impl CombatManager {
                 && best_player_t <= wall_t
                 && best_player_t <= 1.0
             {
+                // Finding #8: drop stale shots whose shooter/target departed;
+                // neither score nor arm hit-protection nor resurrect scores.
+                if !players.contains_key(&target_id) || !players.contains_key(&shot.shooter_id) {
+                    continue;
+                }
+
                 let hit_position = Position {
                     x: p0.x + best_player_t * (p1.x - p0.x),
                     y: p0.y + best_player_t * (p1.y - p0.y),

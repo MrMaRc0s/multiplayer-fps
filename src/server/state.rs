@@ -1,15 +1,22 @@
 use super::{MAX_PLAYERS, TICKS_PER_SECOND};
 use crate::protocol::{PlayerSnapshot, ServerMessage};
 use crate::world::{Maze, Position};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::TAU;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 const PLAYER_RADIUS: f32 = 0.2;
 const MOVEMENT_SPEED: f32 = 2.5;
 const TURN_SPEED: f32 = 2.4;
 const MAX_STEP_SECONDS: f32 = 0.1;
 const INACTIVE_PLAYER_TICKS: u32 = TICKS_PER_SECOND * 10;
+// Per-IP join throttle: 1s window (60 ticks) with a generous burst allowance.
+// 128 covers the 12-client live/stress bursts from one NAT IP plus a full
+// 64-slot fill in a single tick window, while still capping per-IP join floods.
+const JOIN_WINDOW_TICKS: u32 = TICKS_PER_SECOND;
+const JOIN_MAX_PER_WINDOW: u32 = 128;
+// Bound on tracked IPs so spoofed-source floods cannot grow memory unbounded.
+const JOIN_THROTTLE_TRACKED_IPS: usize = 1024;
 
 #[derive(Debug)]
 struct Player {
@@ -22,6 +29,7 @@ struct Player {
     last_input_sequence: Option<u32>,
     last_fire_sequence: Option<u32>,
     last_seen_tick: u32,
+    spawn_index: usize,
 }
 
 use super::combat::{CombatEvent, CombatManager, CombatPlayer};
@@ -34,6 +42,7 @@ pub struct ServerState {
     maze: Maze,
     combat: CombatManager,
     pending_combat_events: Vec<CombatEvent>,
+    join_attempts: HashMap<IpAddr, (u32, u32)>,
 }
 
 impl ServerState {
@@ -45,6 +54,7 @@ impl ServerState {
             maze: Maze::level_one(),
             combat: CombatManager::new(),
             pending_combat_events: Vec::new(),
+            join_attempts: HashMap::new(),
         }
     }
 }
@@ -79,6 +89,17 @@ impl ServerState {
             };
         }
 
+        // Lightweight per-IP join throttle: caps join floods from spoofed
+        // sources sharing one IP. Re-joins from a known SocketAddr above are
+        // exempt; new addresses share a 1s (60-tick) window with a generous
+        // burst so legitimate bursts (12 clients behind one NAT IP, or a full
+        // 64-slot fill within one tick) are unaffected.
+        if self.is_join_rate_limited(address.ip()) {
+            return ServerMessage::Rejected {
+                reason: "Join rate limited, try again shortly".to_owned(),
+            };
+        }
+
         let username = username.trim();
         let rejection = if username.is_empty() {
             Some("Username cannot be empty")
@@ -102,7 +123,11 @@ impl ServerState {
 
         let player_id = self.next_player_id;
         self.next_player_id = self.next_player_id.wrapping_add(1).max(1);
-        let spawn_index = self.players.len();
+        // Lowest-free spawn claim: keeps spawns distinct while n <= spawns.len()
+        // and reuses the lowest actually-free slot after churn instead of
+        // colliding via len-based modulo. Overlap past capacity (64 players on
+        // 5/6/8 spawns) is unavoidable and stays explicit via modulo fallback.
+        let spawn_index = self.lowest_free_spawn_index();
         self.players.insert(
             address,
             Player {
@@ -115,6 +140,7 @@ impl ServerState {
                 last_input_sequence: None,
                 last_fire_sequence: None,
                 last_seen_tick: self.tick,
+                spawn_index,
             },
         );
 
@@ -122,6 +148,58 @@ impl ServerState {
             player_id,
             level: self.maze.level(),
         }
+    }
+
+    fn is_join_rate_limited(&mut self, ip: IpAddr) -> bool {
+        let current_tick = self.tick;
+        match self.join_attempts.get_mut(&ip) {
+            Some((window_start, count)) => {
+                if current_tick.wrapping_sub(*window_start) >= JOIN_WINDOW_TICKS {
+                    *window_start = current_tick;
+                    *count = 1;
+                    false
+                } else if *count >= JOIN_MAX_PER_WINDOW {
+                    true
+                } else {
+                    *count += 1;
+                    false
+                }
+            }
+            None => {
+                // Bound memory: prune stale windows before tracking a new IP;
+                // fail open (allow) if still at capacity so legitimate joins
+                // are never blocked by throttle bookkeeping.
+                if self.join_attempts.len() >= JOIN_THROTTLE_TRACKED_IPS {
+                    self.join_attempts.retain(|_, (start, _)| {
+                        current_tick.wrapping_sub(*start) < JOIN_WINDOW_TICKS
+                    });
+                    if self.join_attempts.len() >= JOIN_THROTTLE_TRACKED_IPS {
+                        return false;
+                    }
+                }
+                self.join_attempts.insert(ip, (current_tick, 1));
+                false
+            }
+        }
+    }
+
+    fn lowest_free_spawn_index(&self) -> usize {
+        let len = self.maze.spawns().len();
+        if len == 0 {
+            return 0;
+        }
+        let used: HashSet<usize> = self
+            .players
+            .values()
+            .map(|player| player.spawn_index % len)
+            .collect();
+        for index in 0..len {
+            if !used.contains(&index) {
+                return index;
+            }
+        }
+        // All spawns claimed (players > spawns): explicit modulo overlap.
+        self.players.len() % len
     }
 
     pub fn apply_input(
@@ -235,11 +313,25 @@ impl ServerState {
         if exit_reached {
             let next_level = (self.maze.level() % 3) + 1;
             self.maze = Maze::for_level(next_level).expect("valid maze level");
-            for (i, player) in self.players.values_mut().enumerate() {
-                player.position = self.maze.spawn_at(i);
-                player.forward = 0;
-                player.turn = 0;
-                player.last_input_sequence = None;
+            // In-flight shots belong to the old maze geometry (stale coords would
+            // otherwise be evaluated vs the new maze), so drop them. Hit
+            // protection and fire cooldown are player state and intentionally
+            // survive the transition; scores also survive (see combat tests).
+            self.combat.clear_shots();
+            // Respawn distinctly while n <= spawns.len() (5/6/8 per level, cap
+            // 64, so overlap past capacity is explicit via modulo). Order by
+            // player id for determinism: HashMap iteration order is random.
+            let spawn_count = self.maze.spawns().len().max(1);
+            let mut ordered: Vec<SocketAddr> = self.players.keys().copied().collect();
+            ordered.sort_by_key(|address| self.players[address].id);
+            for (i, address) in ordered.iter().enumerate() {
+                if let Some(player) = self.players.get_mut(address) {
+                    player.spawn_index = i % spawn_count;
+                    player.position = self.maze.spawn_at(player.spawn_index);
+                    player.forward = 0;
+                    player.turn = 0;
+                    player.last_input_sequence = None;
+                }
             }
         }
 

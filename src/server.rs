@@ -15,6 +15,10 @@ pub const SERVER_ADDRESS: &str = "0.0.0.0:34254";
 pub const MAX_PLAYERS: usize = 64;
 const TICKS_PER_SECOND: u32 = 60;
 const TICK_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / TICKS_PER_SECOND as u64);
+// Upper bound on simulation ticks executed per network frame.
+// Allows bounded catch-up so tick-counted timeouts/protection track
+// wall-clock time under mild lag without risking spiral-of-death.
+const MAX_TICKS_PER_FRAME: u32 = 3;
 
 pub fn run() -> io::Result<()> {
     let socket = UdpSocket::bind(SERVER_ADDRESS)?;
@@ -38,9 +42,16 @@ pub fn run() -> io::Result<()> {
         }
 
         let now = Instant::now();
-        let elapsed = now.duration_since(last_tick);
-        if elapsed >= TICK_INTERVAL {
-            state.update(elapsed.as_secs_f32());
+        let mut ticks_this_frame = 0;
+        // Bounded catch-up: run the fixed-step simulation in lockstep with
+        // wall-clock time so tick-counted timeouts (600 ticks), fire cooldown
+        // (15 ticks) and hit protection (120 ticks) track real time under mild
+        // lag. `last_tick += interval` (not `= now`) avoids drift; the cap plus
+        // the resync below prevents spiral-of-death under severe lag.
+        while now.duration_since(last_tick) >= TICK_INTERVAL
+            && ticks_this_frame < MAX_TICKS_PER_FRAME
+        {
+            state.update(TICK_INTERVAL.as_secs_f32());
             let timed_out = state.remove_inactive_players();
             if !timed_out.is_empty() {
                 for username in timed_out {
@@ -97,6 +108,14 @@ pub fn run() -> io::Result<()> {
             }
 
             broadcast_snapshot(&socket, &state)?;
+            last_tick += TICK_INTERVAL;
+            ticks_this_frame += 1;
+        }
+        // Still behind after the cap: drop the backlog and resync the clock
+        // instead of spiralling to catch up. Timeouts/protection then resume
+        // from wall-clock time on the next frame.
+        if ticks_this_frame == MAX_TICKS_PER_FRAME && now.duration_since(last_tick) >= TICK_INTERVAL
+        {
             last_tick = now;
         }
 
