@@ -47,8 +47,8 @@ Both debug and release compilation are warning-free. The project enforces strict
 
 #### Codebase References
 - Server binary entry point: `src/bin/server.rs:1-5`
-- Server main loop: `src/server.rs:18-91`
-- Automated verification: `audit_check_compiles_and_lints_without_warnings` in `tests/audit_tests.rs:30-41`
+- Server main loop: `src/server.rs:23-123`
+- Automated verification: `audit_check_compiles_and_lints_without_warnings` in `tests/audit_tests.rs:31-53`
 
 #### Live Demonstration Commands
 ```bash
@@ -73,9 +73,9 @@ Waiting for players (capacity: 64)...
 The client binary compiles cleanly with zero warnings under `cargo check`, `cargo build`, and strict `clippy`.
 
 #### Codebase References
-- Client binary entry point: `src/bin/client.rs:7-30`
-- Client networking module: `src/client.rs:1-254`
-- Automated verification: `audit_check_compiles_and_lints_without_warnings` in `tests/audit_tests.rs:30-41`
+- Client binary entry point: `src/bin/client.rs:7-15`
+- Client networking module: `src/client.rs:1-255`
+- Automated verification: `audit_check_compiles_and_lints_without_warnings` in `tests/audit_tests.rs:31-53`
 
 #### Live Demonstration Commands
 ```bash
@@ -96,8 +96,8 @@ When launched, the client prompts: `Enter IP Address [127.0.0.1:34254]: `. The u
 
 #### Codebase References
 - Address prompt: `src/bin/client.rs:32-35` (`ask_for_server`)
-- Parsing and default fallback: `src/client.rs:133-146` (`parse_server_address`)
-- Automated verification: `audit_check_client_asks_for_ip_and_username_and_validates` in `tests/audit_tests.rs:99-127`
+- Parsing and default fallback: `src/client.rs:133-148` (`parse_server_address`)
+- Automated verification: `audit_check_client_asks_for_ip_and_username_and_validates` in `tests/audit_tests.rs:111-149`
 
 #### Live Demonstration Commands
 ```bash
@@ -114,10 +114,10 @@ cargo run --bin client
 The client sends a binary UDP `ClientMessage::Join` datagram. The server validates the request and responds with `ServerMessage::Accepted { player_id, level }`. The client retries up to 3 times before failing with a friendly error if the server is offline.
 
 #### Codebase References
-- Client connection handshake & retry loop: `src/client.rs:162-231` (`connect`)
-- Friendly error message when server is offline: `src/client.rs:228-230`
-- Server join handling: `src/server.rs:108-121` and `src/server/state.rs:71-123`
-- Automated verification: `audit_check_unreachable_server_provides_friendly_error` in `tests/audit_tests.rs:167-192` and `audit_check_live_udp_server_process_and_12_clients` in `tests/audit_tests.rs:949-1007`
+- Client connection handshake & retry loop: `src/client.rs:164-233` (`connect`)
+- Friendly error message when server is offline: `src/client.rs:228-231`
+- Server join handling: `src/server.rs:130-145` and `src/server/state.rs:83-130`
+- Automated verification: `audit_check_unreachable_server_provides_friendly_error` in `tests/audit_tests.rs:190-212` and `audit_check_live_udp_server_process_and_12_clients` in `tests/audit_tests.rs:1044-1102`
 
 #### Live Demonstration Commands
 1. Start the server in terminal 1:
@@ -146,9 +146,9 @@ After entering the IP address, the client prompts: `Enter Name: `. The username 
 
 #### Codebase References
 - Username prompt loop: `src/bin/client.rs:37-45` (`ask_for_username`)
-- Username validation: `src/client.rs:148-160` (`validate_username`)
-- Server unique name enforcement: `src/server/state.rs:85-99`
-- Automated verification: `audit_check_client_asks_for_ip_and_username_and_validates` in `tests/audit_tests.rs:128-166`
+- Username validation: `src/client.rs:150-162` (`validate_username`)
+- Server unique name enforcement: `src/server/state.rs:103-122`
+- Automated verification: `audit_check_client_asks_for_ip_and_username_and_validates` in `tests/audit_tests.rs:150-185`
 
 #### Live Demonstration Commands
 ```bash
@@ -166,9 +166,9 @@ cargo run --bin client
 Upon successful join acceptance, the client initializes SDL2 video subsystems and opens a centered, resizable 960×600 pixel window with hardware VSync enabled.
 
 #### Codebase References
-- Client GUI launcher: `src/bin/client.rs:29` calls `src/window.rs:18-41`
-- Window configuration: `src/window.rs:28-38`
-- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1017-1132`
+- Client GUI launcher: `src/bin/client.rs:29` calls `src/window.rs:60-80`
+- Window configuration: `src/window.rs:63-75`
+- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1112-1228`
 
 ---
 
@@ -180,8 +180,8 @@ The upper-left corner of the window displays an overhead minimap of the entire m
 #### Codebase References
 - Minimap rendering: `src/window/minimap.rs:84-141` (`draw_with_effects`)
 - Dynamic layout & tile scaling: `src/window/minimap.rs:47-71` (`compute_layout`)
-- Main window draw call: `src/window.rs:176-183`
-- Automated verification: `audit_check_mini_map_and_position_updates` in `tests/audit_tests.rs:195-255`
+- Main window draw call: `src/window.rs:259-266`
+- Automated verification: `audit_check_mini_map_and_position_updates` in `tests/audit_tests.rs:217-274`
 
 ---
 
@@ -191,10 +191,10 @@ The upper-left corner of the window displays an overhead minimap of the entire m
 The local player is drawn as a distinct bright green marker (`RGB(70, 220, 125)`). Other connected players are drawn in red (`RGB(225, 73, 75)`). If a player is under 2.0-second hit protection, their marker alternates with white flash ticks.
 
 #### Codebase References
-- Color definitions: `src/window/minimap.rs:19-28` (`player_minimap_color`)
+- Color definitions: `src/window/minimap.rs:22-31` (`player_minimap_color`)
 - Screen coordinate transformation: `src/window/minimap.rs:40-45` (`player_screen_position`)
-- Player marker drawing: `src/window/minimap.rs:159-183` (`draw_player`)
-- Automated verification: `audit_check_mini_map_and_position_updates` in `tests/audit_tests.rs:210-224`
+- Player marker drawing: `src/window/minimap.rs:174-221` (`draw_player`)
+- Automated verification: `audit_check_mini_map_and_position_updates` in `tests/audit_tests.rs:222-243`
 
 ---
 
@@ -202,15 +202,15 @@ The local player is drawn as a distinct bright green marker (`RGB(70, 220, 125)`
 
 #### Explanation
 Movement is fully synchronized and authoritative:
-1. Keyboard input (`W`/`S` or `Up`/`Down`) is sampled and transmitted over UDP at 60 Hz to the server (`src/window.rs:80-97`).
-2. The server simulates movement with wall-sliding collision at 60 ticks/second (`src/server/state.rs:176-200`).
-3. The server broadcasts authoritative `Snapshot` packets to all clients (`src/server.rs:85, 141-144`).
-4. The client receives the snapshot and updates the player's marker position on the minimap (`src/window.rs:133-140, 176-183`).
+1. Keyboard input (`W`/`S` or `Up`/`Down`) is sampled and transmitted over UDP at 60 Hz to the server (`src/window.rs:106-121, 169-173`).
+2. The server simulates movement with wall-sliding collision at 60 ticks/second (`src/server/state.rs:262-286`).
+3. The server broadcasts authoritative `Snapshot` packets to all clients (`src/server.rs:90-106, 172-181`).
+4. The client receives the snapshot and updates the player's marker position on the minimap (`src/window.rs:216-223, 259-266`).
 
 #### Codebase References
-- Server authoritative motion: `src/server/state.rs:176-200`
+- Server authoritative motion: `src/server/state.rs:262-286`
 - Client snapshot reception: `src/client.rs:86-101`
-- Automated verification: `audit_check_mini_map_and_position_updates` in `tests/audit_tests.rs:225-254`
+- Automated verification: `audit_check_mini_map_and_position_updates` in `tests/audit_tests.rs:250-274`
 
 ---
 
@@ -220,10 +220,10 @@ Movement is fully synchronized and authoritative:
 The client renders a 2.5D retro monochrome first-person perspective using a Digital Differential Analysis (DDA) raycaster. When the player turns (`A`/`D` or `Left`/`Right`) or moves forward/backward (`W`/`S` or `Up`/`Down`), the camera rays update every frame across the 60° horizontal Field of View, recalculating wall slice heights and floating eyeball sprite projections.
 
 #### Codebase References
-- Raycasting view rendering: `src/window/view.rs:149-239` (`draw_with_effects`)
-- DDA raycasting algorithm: `src/window/view.rs:599-650` (`cast_ray`)
-- Opponent eyeball sprite projection: `src/window/view.rs:293-320` (`project_player`)
-- Automated verification: `audit_check_camera_view_and_ray_casting_updates` in `tests/audit_tests.rs:257-315`
+- Raycasting view rendering: `src/window/view.rs:148-256` (`draw_with_effects`)
+- DDA raycasting algorithm: `src/window/view.rs:685-736` (`cast_ray`)
+- Opponent eyeball sprite projection: `src/window/view.rs:292-320` (`project_player`)
+- Automated verification: `audit_check_camera_view_and_ray_casting_updates` in `tests/audit_tests.rs:279-334`
 
 ---
 
@@ -233,10 +233,10 @@ The client renders a 2.5D retro monochrome first-person perspective using a Digi
 The frame rate is visibly rendered directly on the SDL canvas inside the upper-right corner HUD card (e.g. `FPS: 60  LEVEL: 1`), drawn with an embedded retro phosphor green 3×5 bitmap font. It is not hidden in the terminal or window title bar.
 
 #### Codebase References
-- HUD frame rate rendering: `src/window/hud.rs:140-180` (`draw_fps_and_level`)
-- Zero-allocation string formatting: `src/window/hud.rs:114-124` (`format_hud_string`)
-- Canvas HUD call: `src/window.rs:184-190`
-- Automated verification: `audit_check_fps_counter_displayed_and_above_50_fps` in `tests/audit_tests.rs:317-365`
+- HUD frame rate rendering: `src/window/hud.rs:186-229` (`draw_fps_and_level`)
+- Zero-allocation string formatting: `src/window/hud.rs:159-170` (`format_hud_string`)
+- Canvas HUD call: `src/window.rs:267-273`
+- Automated verification: `audit_check_fps_counter_displayed_and_above_50_fps` in `tests/audit_tests.rs:339-403`
 
 ---
 
@@ -250,9 +250,9 @@ The client utilizes a lightweight, zero-heap-allocation rendering pipeline:
 - Hardware VSync synchronizes rendering with the monitor refresh rate (typically 60 Hz), maintaining a stable 60 FPS (exceeding the 50 FPS audit requirement).
 
 #### Codebase References
-- Rolling FPS tracker: `src/window/hud.rs:13-59` (`FpsTracker`)
-- Frame recording: `src/window.rs:54-56`
-- Automated verification: `audit_check_fps_counter_displayed_and_above_50_fps` in `tests/audit_tests.rs:326-352`
+- Rolling FPS tracker: `src/window/hud.rs:11-66` (`FpsTracker`)
+- Frame recording: `src/window.rs:65-75, 177-179`
+- Automated verification: `audit_check_fps_counter_displayed_and_above_50_fps` in `tests/audit_tests.rs:340-372`
 
 ---
 
@@ -267,9 +267,9 @@ The client utilizes a lightweight, zero-heap-allocation rendering pipeline:
   3. Automated integration test `audit_check_server_binds_to_all_interfaces_and_arbitrary_client` verifies connection from distinct subnets (`192.168.1.100`, `10.0.0.42`, `172.16.50.88`).
 
 #### Codebase References
-- Server binding constant: `src/server.rs:13, 19` (`SERVER_ADDRESS = "0.0.0.0:34254"`)
-- Client ephemeral binding: `src/client.rs:163` (`0.0.0.0:0`)
-- Automated verification: `audit_check_server_binds_to_all_interfaces_and_arbitrary_client` in `tests/audit_tests.rs:46-94`
+- Server binding constant: `src/server.rs:14, 24` (`SERVER_ADDRESS = "0.0.0.0:34254"`)
+- Client ephemeral binding: `src/client.rs:165-172` (`0.0.0.0:0`)
+- Automated verification: `audit_check_server_binds_to_all_interfaces_and_arbitrary_client` in `tests/audit_tests.rs:58-106`
 
 ---
 
@@ -283,10 +283,10 @@ The client utilizes a lightweight, zero-heap-allocation rendering pipeline:
 - Real-process test `audit_check_live_udp_server_process_and_12_clients` connects 12 live UDP sockets to a spawned server binary.
 
 #### Codebase References
-- Server capacity: `src/server.rs:14` (`MAX_PLAYERS = 64`)
-- Inactivity eviction: `src/server/state.rs:12, 239-259` (`remove_inactive_players`)
-- 3-minute 12-client stress test: `tests/audit_tests.rs:740-798`
-- Live process 12-client test: `tests/audit_tests.rs:949-1007`
+- Server capacity: `src/server.rs:15` (`MAX_PLAYERS = 64`)
+- Inactivity eviction: `src/server/state.rs:12, 341-361` (`remove_inactive_players`)
+- 3-minute 12-client stress test: `tests/audit_tests.rs:835-893`
+- Live process 12-client test: `tests/audit_tests.rs:1044-1102`
 
 #### Live Demonstration Commands
 To demonstrate multiple simultaneous clients during peer review:
@@ -313,9 +313,9 @@ cargo test audit_check_multiplayer_capacity_and_10_plus_clients_stress_test -- -
 - Benchmark frame execution time is `< 2.5ms` per frame (allowing upwards of 400 FPS without VSync), guaranteeing rock-solid 60 FPS when VSync is engaged.
 
 #### Codebase References
-- Non-blocking client socket: `src/client.rs:191`
+- Non-blocking client socket: `src/client.rs:193-195`
 - Non-blocking update drain: `src/client.rs:73-126`
-- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1017-1132`
+- Automated verification: `audit_check_client_gui_rendering_and_performance` in `tests/audit_tests.rs:1112-1228`
 
 ---
 
@@ -329,23 +329,23 @@ cargo test audit_check_multiplayer_capacity_and_10_plus_clients_stress_test -- -
 ### T2: Why manual binary serialization?
 - **Zero Third-Party Dependencies**: No dependency on `serde`, `bincode`, or `protobuf`.
 - **Deterministic Endianness**: All integers (`u32`, `f32`, `i32`) use explicit big-endian serialization via `.to_be_bytes()` and `u32::from_be_bytes()`, guaranteeing cross-platform compatibility across x86_64, ARM64, and WebAssembly.
-- **Guaranteed Packet Size Under MTU Limit**: Standard Ethernet MTU is 1,500 bytes (typical IP/UDP payload limit is 1,400 bytes before IP fragmentation occurs). By packing player snapshots to exactly 16 bytes each (`u32 id` + `f32 x` + `f32 y` + `f32 dir` + flags), all 64 players easily fit in 1,032 bytes—well within `MAX_PACKET_SIZE = 1,400`.
-- Reference: `src/protocol.rs:18-23, 186-285`
+- **Guaranteed Packet Size Under MTU Limit**: Standard Ethernet MTU is 1,500 bytes (typical IP/UDP payload limit is 1,400 bytes before IP fragmentation occurs). By packing player snapshots to 21 bytes each (`u32 id` + `f32 x` + `f32 y` + `f32 dir` + `i32 score` + `u8 flags`), all 64 players easily fit in 1,356 bytes ($12\text{B header} + 64 \times 21\text{B}$)—well within `MAX_PACKET_SIZE = 1,400` with 44 bytes of safety margin.
+- Reference: `src/protocol.rs:40-48, 191-285`
 
 ### T3: Why one datagram = one complete message?
 - UDP preserves datagram boundaries (unlike TCP, which is a continuous stream that requires custom message framing like length-prefixing).
 - If an individual datagram is dropped or corrupted on the network, only that specific message is lost. No partial-packet buffering, stream reassembly, or buffer overflow attacks can occur.
-- Reference: `src/protocol.rs:122-285`
+- Reference: `src/protocol.rs:121-285`
 
 ### T4: Why validate magic bytes `MZWR` and protocol version?
 - **Traffic Disambiguation**: The 4-byte magic sequence `MZWR` (`[0x4D, 0x5A, 0x57, 0x52]`) prevents arbitrary UDP port probes, internet background radiation, or broadcast noise from being processed as game state.
 - **Protocol Versioning**: Byte 5 encodes the protocol version (`VERSION = 1`). If an outdated or incompatible client attempts to join, the packet is rejected with `PacketError::UnsupportedVersion` before decoding invalid fields.
-- Reference: `src/protocol.rs:4-5, 186-197`
+- Reference: `src/protocol.rs:4-5, 421-433`
 
 ### T5: Why client binds `0.0.0.0:0` and server binds `0.0.0.0:34254`?
 - **Server `0.0.0.0:34254`**: Binds `INADDR_ANY`, allowing the operating system to accept incoming UDP datagrams on every network interface (localhost `127.0.0.1`, LAN IP e.g. `192.168.1.x`, VPN, or WAN). If the server bound `127.0.0.1:34254`, other machines on the LAN could never connect.
 - **Client `0.0.0.0:0`**: Port `0` instructs the kernel to allocate an available dynamic/ephemeral port (e.g. `49152–65535`). This allows running multiple client processes on the same computer simultaneously without `AddressAlreadyInUse` errors.
-- Reference: `src/server.rs:13, 19` and `src/client.rs:163`
+- Reference: `src/server.rs:14, 24` and `src/client.rs:165-172`
 
 ### T6: Why and how does the server reject old or duplicate UDP sequence numbers?
 - Because UDP datagrams may be reordered or duplicated in transit, an outdated movement packet (e.g. sequence 15) could arrive after a newer one (sequence 16). Applying packet 15 would move the player backwards.
@@ -357,7 +357,7 @@ cargo test audit_check_multiplayer_capacity_and_10_plus_clients_stress_test -- -
   }
   ```
   This handles sequence progression and properly handles 32-bit unsigned integer wrap-around back to 0.
-- Reference: `src/server/state.rs:138-141, 349-352` and `src/client.rs:233-236`
+- Reference: `src/server/state.rs:453-456` and `src/client.rs:235-238`
 
 ### T7: How does 4-corner bounding box collision work?
 - In `src/world.rs`, players have a physical radius ($r = 0.2$ tiles). If collision only checked the center point $(x, y)$, a player could walk partially into a wall up to their center.
@@ -374,7 +374,7 @@ cargo test audit_check_multiplayer_capacity_and_10_plus_clients_stress_test -- -
   1. Test horizontal step $P_{\text{next\_x}} = (x + \Delta x, y)$. If `can_occupy` is true, update $x$.
   2. Test vertical step $P_{\text{next\_y}} = (x, y + \Delta y)$. If `can_occupy` is true, update $y$.
 - If a player runs diagonally into a vertical wall, $\Delta x$ is blocked, but $\Delta y$ succeeds, allowing the player to slide smoothly along the wall corridor.
-- Reference: `src/server/state.rs:185-200`
+- Reference: `src/server/state.rs:262-286`
 
 ### T9: How does continuous swept-segment collision prevent bullet tunneling?
 - Projectiles travel rapidly at $25.0\text{ tiles/second}$. In a 60 Hz tick ($16.6\text{ms}$), a bullet travels $\sim 0.42\text{ tiles}$. If collision checked only discrete start and end points, a bullet could completely "tunnel" (teleport) through a thin wall or opponent between ticks.
@@ -383,16 +383,16 @@ cargo test audit_check_multiplayer_capacity_and_10_plus_clients_stress_test -- -
   $$|P_0 + t \cdot \vec{d} - C|^2 = r^2 \implies a \cdot t^2 + b \cdot t + c = 0$$
   Finding the earliest hit $t_{\text{player}} \in [0, 1]$.
 - If $t_{\text{player}} \le t_{\text{wall}}$ and $t_{\text{player}} \le 1.0$, the player is hit; otherwise, the bullet stops at the wall.
-- Reference: `src/server/combat.rs:188-274, 304-419`
+- Reference: `src/server/combat.rs:182-284, 323-438`
 
 ### T10: How does DDA raycasting with fish-eye correction and wall depth buffering work?
 - **DDA Raycasting**: The camera casts a ray for every 2 horizontal screen pixels across a 60° FOV ($FOV = \pi / 3$). Digital Differential Analysis steps through grid cells along $X$ and $Y$ tile boundaries using precomputed $\Delta x = |1 / \cos(\theta)|$ and $\Delta y = |1 / \sin(\theta)|$ until encountering `Tile::Wall`.
 - **Fish-Eye Correction**: Directly measuring Euclidean distance along angled rays causes straight walls to appear curved (the fish-eye effect). Multiplying the raw distance by $\cos(\theta_{\text{ray}} - \theta_{\text{player}})$ projects the distance perpendicular to the camera plane.
 - **Wall Depth Buffer**: An array `wall_depth[column]` stores the corrected wall distance for every screen column. When projecting opponent eyeball sprites and shot tracers, pixels farther than `wall_depth[column]` are discarded, providing perfect wall occlusion.
-- Reference: `src/window/view.rs:134-136, 174-202, 599-650`
+- Reference: `src/window/view.rs:10, 133-135, 168-202, 685-736`
 
 ### T11: How are scores and 2-second hit protection managed authoritatively?
-- **Authoritative Simulation**: Clients only send input intentions (`Fire`); the server computes all trajectories, hits, and scores in `src/server/combat.rs:119-274`. Clients cannot award themselves points.
+- **Authoritative Simulation**: Clients only send input intentions (`Fire`); the server computes all trajectories, hits, and scores in `src/server/combat.rs:182-284`. Clients cannot award themselves points.
 - **Original Maze War Scoring**:
   - Hitting an opponent gives the shooter **+10 points**.
   - The target receives a **-5 point penalty** (scores may go negative).
@@ -402,7 +402,7 @@ cargo test audit_check_multiplayer_capacity_and_10_plus_clients_stress_test -- -
   - During protection, the target can move freely to escape, but cannot be hit again. Subsequent shots pass through without scoring.
   - In accordance with classic Maze War rules, there are no health bars, extra lives, ammo counters, reloading, or death/respawn delays.
   - Visual feedback blinks the protected player's avatar in first-person and minimap views.
-- Reference: `src/server/combat.rs:8, 10-11, 96-103, 211-265`
+- Reference: `src/server/combat.rs:7-11, 96-103, 182-284`
 
 ---
 
@@ -518,7 +518,7 @@ cargo test audit_check_firing_visuals_projectile_and_muzzle_flash_rendered
    - Target blinks during 2-second hit protection and cannot be hit again until protection expires.
 5. **Demonstrate Level Progression**:
    - Navigate to the gold exit tile `E` on the minimap.
-   - Both players advance synchronously to Level 2 (denser maze with 12 dead ends), then Level 3 (21 dead ends), cycling back to Level 1. Scores persist!
+   - Both players advance synchronously to Level 2 (denser maze with 6 dead ends), then Level 3 (17 dead ends), cycling back to Level 1. Scores persist!
 6. **Demonstrate Frame Rate**:
    - Look at the top-right HUD: `FPS: 60  LEVEL: <n>`.
    - Frame rate remains stably at 60 FPS under all movement and shooting actions.
