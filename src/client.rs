@@ -70,6 +70,18 @@ impl Connection {
         Ok(())
     }
 
+    pub fn send_respawn(&self) -> Result<(), String> {
+        let packet = encode_client(&ClientMessage::Respawn {
+            player_id: self.player_id,
+        })
+        .map_err(|error| format!("could not prepare respawn input: {error}"))?;
+
+        self.socket
+            .send(&packet)
+            .map_err(|error| format!("could not send respawn input: {error}"))?;
+        Ok(())
+    }
+
     pub fn receive_updates(&mut self) -> Result<NetworkUpdates, String> {
         let mut buffer = [0_u8; MAX_PACKET_SIZE];
         let mut updates = NetworkUpdates::default();

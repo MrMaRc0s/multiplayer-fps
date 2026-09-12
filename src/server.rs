@@ -166,6 +166,9 @@ fn handle_packet(
         } => {
             state.apply_fire(source, player_id, sequence);
         }
+        ClientMessage::Respawn { player_id } => {
+            state.apply_respawn(source, player_id);
+        }
     }
 
     Ok(())

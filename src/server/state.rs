@@ -253,6 +253,25 @@ impl ServerState {
         fired
     }
 
+    pub fn apply_respawn(&mut self, address: SocketAddr, player_id: u32) -> bool {
+        let Some(player) = self.players.get_mut(&address) else {
+            return false;
+        };
+        if player.id != player_id {
+            return false;
+        }
+
+        player.spawn_index = 0;
+        player.position = self.maze.spawn();
+        player.direction = 0.0;
+        player.forward = 0;
+        player.turn = 0;
+        player.last_seen_tick = self.tick;
+        player.last_input_sequence = None;
+        self.combat.clear_shots();
+        true
+    }
+
     pub fn update(&mut self, elapsed_seconds: f32) {
         if !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 {
             return;
@@ -714,5 +733,68 @@ mod tests {
             players,
             vec![(id1, "shooter".to_owned()), (id2, "target".to_owned())]
         );
+    }
+
+    #[test]
+    fn respawn_resets_player_to_initial_spawn_position() {
+        let mut state = ServerState::new();
+        let p1 = address(4000);
+        let id1 = accepted_player_id(state.join(p1, "player1".to_owned()));
+
+        // Move player away from spawn
+        state.set_player_position(id1, Position { x: 8.5, y: 7.5 });
+        state.set_player_direction(id1, 2.5);
+
+        assert_eq!(state.player_position(id1).unwrap(), Position { x: 8.5, y: 7.5 });
+
+        // Apply respawn
+        assert!(state.apply_respawn(p1, id1));
+
+        let initial_spawn = state.maze.spawn();
+        assert_eq!(state.player_position(id1).unwrap(), initial_spawn);
+        assert_eq!(state.player_direction(id1).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn respawn_with_invalid_credentials_is_rejected() {
+        let mut state = ServerState::new();
+        let p1 = address(4000);
+        let p2 = address(4001);
+        let id1 = accepted_player_id(state.join(p1, "player1".to_owned()));
+
+        // Wrong player ID from known address
+        assert!(!state.apply_respawn(p1, id1 + 99));
+
+        // Valid player ID from unknown address
+        assert!(!state.apply_respawn(p2, id1));
+    }
+
+    #[test]
+    fn respawn_clears_velocity_and_in_flight_shots_and_updates_snapshot() {
+        let mut state = ServerState::new();
+        let p1 = address(4000);
+        let id1 = accepted_player_id(state.join(p1, "player1".to_owned()));
+
+        // Set movement and fire a shot
+        state.apply_input(p1, id1, 1, 1, 0);
+        state.update(0.1);
+        assert!(state.apply_fire(p1, id1, 1));
+        assert_eq!(state.combat.active_shots_count(), 1);
+
+        // Respawn
+        assert!(state.apply_respawn(p1, id1));
+
+        // Shots should be cleared
+        assert_eq!(state.combat.active_shots_count(), 0);
+
+        // Snapshot should show spawn position and direction 0.0
+        let ServerMessage::Snapshot { players, .. } = state.snapshot() else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(players.len(), 1);
+        assert_eq!(players[0].id, id1);
+        assert_eq!(players[0].x, state.maze.spawn().x);
+        assert_eq!(players[0].y, state.maze.spawn().y);
+        assert_eq!(players[0].direction, 0.0);
     }
 }

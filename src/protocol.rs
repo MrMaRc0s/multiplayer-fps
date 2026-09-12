@@ -6,6 +6,7 @@ pub const VERSION: u8 = 1;
 const JOIN: u8 = 1;
 const INPUT: u8 = 2;
 const FIRE: u8 = 3;
+const RESPAWN: u8 = 4;
 const ACCEPTED: u8 = 101;
 const REJECTED: u8 = 102;
 const SNAPSHOT: u8 = 103;
@@ -34,6 +35,9 @@ pub enum ClientMessage {
     Fire {
         player_id: u32,
         sequence: u32,
+    },
+    Respawn {
+        player_id: u32,
     },
 }
 
@@ -150,6 +154,11 @@ pub fn encode_client(message: &ClientMessage) -> Result<Vec<u8>, PacketError> {
             packet.extend_from_slice(&sequence.to_be_bytes());
             packet
         }
+        ClientMessage::Respawn { player_id } => {
+            let mut packet = packet_header(RESPAWN);
+            packet.extend_from_slice(&player_id.to_be_bytes());
+            packet
+        }
     };
 
     if packet.len() > MAX_PACKET_SIZE {
@@ -184,6 +193,10 @@ pub fn decode_client(packet: &[u8]) -> Result<ClientMessage, PacketError> {
             sequence: read_u32(&payload[4..8])?,
         }),
         FIRE => Err(PacketError::InvalidLength),
+        RESPAWN if payload.len() == 4 => Ok(ClientMessage::Respawn {
+            player_id: read_u32(&payload[..4])?,
+        }),
+        RESPAWN => Err(PacketError::InvalidLength),
         _ => Err(PacketError::UnknownMessage(kind)),
     }
 }
@@ -538,6 +551,15 @@ mod tests {
             player_id: 42,
             sequence: 100,
         };
+
+        let packet = encode_client(&message).unwrap();
+
+        assert_eq!(decode_client(&packet).unwrap(), message);
+    }
+
+    #[test]
+    fn respawn_message_round_trip() {
+        let message = ClientMessage::Respawn { player_id: 42 };
 
         let packet = encode_client(&message).unwrap();
 

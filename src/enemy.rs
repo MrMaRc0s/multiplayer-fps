@@ -114,6 +114,7 @@ impl EnemyManager {
     }
 
     pub fn reset(&mut self, maze: &Maze, player_pos: Option<Position>) {
+        self.enabled = true;
         self.player_lost = false;
         self.spawn_enemies_for_maze(maze, player_pos);
     }
@@ -570,6 +571,80 @@ mod tests {
         assert!(!manager.is_cleared());
         assert!(manager.active_enemy_count() > 0);
         assert!(!manager.has_player_lost());
+    }
+
+    #[test]
+    fn test_retry_resets_level_and_spawns_all_enemies_at_initial_positions() {
+        let maze = Maze::level_one();
+        let player_spawn = maze.spawn();
+        let mut manager = EnemyManager::for_maze(&maze, Some(player_spawn));
+        manager.set_enabled(true);
+
+        let initial_count = manager.enemies().len();
+        assert!(initial_count > 0);
+        let initial_positions: Vec<Position> = manager.enemies().iter().map(|e| e.position).collect();
+
+        // 1. Simulate enemy moving towards player
+        manager.update(0.1, &maze, player_spawn);
+
+        // 2. Simulate player shooting and killing the first enemy
+        let first_enemy_pos = manager.enemies()[0].position;
+        let shot_start = Position {
+            x: first_enemy_pos.x - 0.5,
+            y: first_enemy_pos.y,
+        };
+        let shot_end = Position {
+            x: first_enemy_pos.x + 0.5,
+            y: first_enemy_pos.y,
+        };
+        let hit = manager.check_shot_hit(shot_start, shot_end);
+        assert!(hit.is_some(), "first enemy must be hit by shot");
+        assert!(!manager.enemies()[0].alive, "killed enemy must be dead");
+        assert_eq!(manager.active_enemy_count(), initial_count - 1);
+
+        // 3. Simulate another enemy touching the player -> game over
+        let remaining_idx = manager.enemies().iter().position(|e| e.alive).unwrap();
+        manager.enemies_mut()[remaining_idx].position = player_spawn;
+        let lost = manager.update(0.016, &maze, player_spawn);
+        assert!(lost, "enemy touching player triggers loss");
+        assert!(manager.has_player_lost(), "player_lost must be true");
+
+        // 4. RETRY: player triggers retry (reset level)
+        manager.reset(&maze, Some(player_spawn));
+
+        // 5. Verify reset state:
+        assert!(!manager.has_player_lost(), "player_lost must be cleared");
+        assert!(manager.is_enabled(), "enemies must be enabled on retry");
+        assert_eq!(
+            manager.active_enemy_count(),
+            initial_count,
+            "all enemies must be restored alive"
+        );
+
+        for (i, enemy) in manager.enemies().iter().enumerate() {
+            assert!(enemy.alive, "enemy {i} must be alive after retry");
+            assert_eq!(
+                enemy.position, initial_positions[i],
+                "enemy {i} must be restored to its initial spawn position"
+            );
+            assert_ne!(
+                enemy.position, player_spawn,
+                "enemy {i} must not spawn directly on the player spawn position"
+            );
+        }
+    }
+
+    #[test]
+    fn test_retry_even_when_enemies_were_disabled() {
+        let maze = Maze::level_one();
+        let player_spawn = maze.spawn();
+        let mut manager = EnemyManager::for_maze(&maze, Some(player_spawn));
+        manager.set_enabled(false);
+
+        manager.reset(&maze, Some(player_spawn));
+        assert!(manager.is_enabled(), "reset must ensure enemies are enabled");
+        assert!(!manager.has_player_lost());
+        assert_eq!(manager.active_enemy_count(), manager.enemies().len());
     }
 
     #[test]

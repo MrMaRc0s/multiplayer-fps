@@ -163,16 +163,18 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
                     game_state = menu::GameState::Playing;
                 }
                 Event::KeyDown {
-                    keycode: Some(Keycode::R),
+                    keycode: Some(Keycode::R | Keycode::Return | Keycode::Space),
                     repeat: false,
                     ..
                 } if game_state.is_game_over() => {
                     let spawn_pos = maze.spawn();
+                    let _ = connection.send_respawn();
                     if let Some(snapshot) = &mut latest_snapshot {
                         for player in &mut snapshot.players {
                             if player.id == connection.player_id() {
                                 player.x = spawn_pos.x;
                                 player.y = spawn_pos.y;
+                                player.direction = 0.0;
                             }
                         }
                     }
@@ -215,9 +217,19 @@ pub fn run(username: &str, mut connection: Connection) -> Result<(), String> {
                             enemy_manager.toggle_enabled();
                             cleared_banner_until = None;
                         }
-                        menu::MenuAction::ResetEnemies => {
-                            let own_pos = own_snapshot.map(|p| Position { x: p.x, y: p.y });
-                            enemy_manager.reset(&maze, own_pos);
+                        menu::MenuAction::ResetLevel => {
+                            let spawn_pos = maze.spawn();
+                            let _ = connection.send_respawn();
+                            if let Some(snapshot) = &mut latest_snapshot {
+                                for player in &mut snapshot.players {
+                                    if player.id == connection.player_id() {
+                                        player.x = spawn_pos.x;
+                                        player.y = spawn_pos.y;
+                                        player.direction = 0.0;
+                                    }
+                                }
+                            }
+                            enemy_manager.reset(&maze, Some(spawn_pos));
                             cleared_banner_until = None;
                         }
                         menu::MenuAction::Quit => break 'game,

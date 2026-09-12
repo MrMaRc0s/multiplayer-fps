@@ -8,7 +8,7 @@ pub const PAUSE_MENU_ITEMS: [&str; 5] = [
     "RESUME GAME",
     "CROSSHAIR",
     "ENEMIES",
-    "RESET ENEMIES",
+    "RESET LEVEL",
     "QUIT GAME",
 ];
 
@@ -25,7 +25,7 @@ pub enum MenuAction {
     Resume,
     ToggleCrosshair,
     ToggleEnemies,
-    ResetEnemies,
+    ResetLevel,
     Quit,
 }
 
@@ -69,7 +69,7 @@ impl GameState {
                 2 => MenuAction::ToggleEnemies,
                 3 => {
                     *self = Self::Playing;
-                    MenuAction::ResetEnemies
+                    MenuAction::ResetLevel
                 }
                 4 => MenuAction::Quit,
                 _ => MenuAction::None,
@@ -206,16 +206,16 @@ pub fn draw_game_over_dialog(canvas: &mut Canvas<Window>) -> Result<(), String> 
     draw_bitmap_text(canvas, subtitle, sub_x, sub_y, sub_scale, Color::RGB(240, 180, 180))?;
 
     let opt_scale = 2;
-    let opt1 = "[R] RETRY";
+    let opt1 = "[R/ENTER] RETRY";
     let opt2 = "[E] DISABLE ENEMIES";
     let opt3 = "[ESC] MENU";
 
     let opt_start_y = sub_y + 32;
     let line_h = 24;
 
-    draw_bitmap_text(canvas, opt1, box_x + 60, opt_start_y, opt_scale, Color::RGB(255, 255, 255))?;
-    draw_bitmap_text(canvas, opt2, box_x + 60, opt_start_y + line_h, opt_scale, Color::RGB(255, 220, 140))?;
-    draw_bitmap_text(canvas, opt3, box_x + 60, opt_start_y + line_h * 2, opt_scale, Color::RGB(180, 200, 220))?;
+    draw_bitmap_text(canvas, opt1, box_x + 50, opt_start_y, opt_scale, Color::RGB(255, 255, 255))?;
+    draw_bitmap_text(canvas, opt2, box_x + 50, opt_start_y + line_h, opt_scale, Color::RGB(255, 220, 140))?;
+    draw_bitmap_text(canvas, opt3, box_x + 50, opt_start_y + line_h * 2, opt_scale, Color::RGB(180, 200, 220))?;
 
     Ok(())
 }
@@ -286,7 +286,7 @@ mod tests {
         assert!(state.is_paused());
 
         state = GameState::Paused { selected_item: 3 };
-        assert_eq!(state.activate_selection(), MenuAction::ResetEnemies);
+        assert_eq!(state.activate_selection(), MenuAction::ResetLevel);
         assert_eq!(state, GameState::Playing);
 
         state = GameState::Paused { selected_item: 4 };
