@@ -1,6 +1,8 @@
 use maze_wars::client::connect;
 use maze_wars::enemy::EnemyManager;
-use maze_wars::protocol::{ClientMessage, MAX_PACKET_SIZE, ServerMessage, decode_client, encode_server};
+use maze_wars::protocol::{
+    ClientMessage, PacketError, MAX_PACKET_SIZE, ServerMessage, decode_client, encode_server,
+};
 use maze_wars::server::state::ServerState;
 use maze_wars::window::menu::{GameState, MenuAction, PAUSE_MENU_ITEMS};
 use maze_wars::world::{Maze, Position};
@@ -188,3 +190,170 @@ fn test_pause_menu_reset_level_flow() {
     assert_eq!(action, MenuAction::ResetLevel);
     assert_eq!(state, GameState::Playing);
 }
+
+#[test]
+fn test_malformed_respawn_packets_rejected() {
+    // RESPAWN tag is 4, version is 1, MAGIC is b"MZWR"
+    // Valid packet: b"MZWR\x01\x04" + 4-byte player_id (len = 10, payload len = 4)
+
+    // Truncated (no payload)
+    let err = decode_client(b"MZWR\x01\x04").unwrap_err();
+    assert_eq!(err, PacketError::InvalidLength);
+
+    // Truncated (3 bytes payload)
+    let err = decode_client(b"MZWR\x01\x04\x00\x00\x01").unwrap_err();
+    assert_eq!(err, PacketError::InvalidLength);
+
+    // Oversized (5 bytes payload)
+    let err = decode_client(b"MZWR\x01\x04\x00\x00\x00\x01\x99").unwrap_err();
+    assert_eq!(err, PacketError::InvalidLength);
+}
+
+#[test]
+fn test_retry_across_all_three_levels() {
+    for level_num in 1..=3 {
+        let mut server = ServerState::new();
+        let addr = "127.0.0.1:45678".parse().unwrap();
+        let accepted = server.join(addr, "level_tester".to_string());
+        let player_id = match accepted {
+            ServerMessage::Accepted { player_id, .. } => player_id,
+            _ => panic!("join failed"),
+        };
+
+        // Advance to desired level
+        for _ in 1..level_num {
+            server.set_player_position(player_id, server.maze().exit());
+            server.update(0.016);
+        }
+        assert_eq!(server.maze().level(), level_num);
+
+        let maze = *server.maze();
+        let spawn = maze.spawn();
+
+        let mut enemy_manager = EnemyManager::for_maze(&maze, Some(spawn));
+        enemy_manager.set_enabled(true);
+        let count = enemy_manager.enemies().len();
+        assert!(count > 0, "level {level_num} must have enemies");
+
+        // Move player away
+        server.set_player_position(player_id, Position { x: 5.5, y: 5.5 });
+        server.set_player_direction(player_id, 1.5);
+
+        // Apply respawn
+        assert!(server.apply_respawn(addr, player_id));
+        enemy_manager.reset(&maze, Some(spawn));
+
+        // Player is at level's initial spawn
+        assert_eq!(server.player_position(player_id).unwrap(), spawn);
+        assert_eq!(server.player_direction(player_id).unwrap(), 0.0);
+
+        // Enemies restored
+        assert_eq!(enemy_manager.active_enemy_count(), count);
+        assert!(!enemy_manager.has_player_lost());
+        assert!(enemy_manager.is_enabled());
+
+        for enemy in enemy_manager.enemies() {
+            assert!(enemy.alive);
+            let dist = ((enemy.position.x - spawn.x).powi(2) + (enemy.position.y - spawn.y).powi(2)).sqrt();
+            assert!(dist >= 3.0, "enemy should not spawn within 3.0 units of player spawn on level {level_num}");
+        }
+    }
+}
+
+#[test]
+fn test_respawn_preserves_player_score_and_roster() {
+    let mut server = ServerState::new();
+    let addr1 = "127.0.0.1:45678".parse().unwrap();
+    let addr2 = "127.0.0.1:45679".parse().unwrap();
+    let accepted1 = server.join(addr1, "scorer".to_string());
+    let id1 = match accepted1 {
+        ServerMessage::Accepted { player_id, .. } => player_id,
+        _ => panic!("join failed"),
+    };
+    let accepted2 = server.join(addr2, "target".to_string());
+    let id2 = match accepted2 {
+        ServerMessage::Accepted { player_id, .. } => player_id,
+        _ => panic!("join failed"),
+    };
+
+    // Have id1 score by shooting id2
+    // Place target right in front of shooter
+    server.set_player_position(id1, Position { x: 1.5, y: 1.5 });
+    server.set_player_direction(id1, 0.0);
+    server.set_player_position(id2, Position { x: 2.5, y: 1.5 });
+
+    assert!(server.apply_fire(addr1, id1, 1));
+    server.update(0.1);
+
+    assert_eq!(server.score(id1), 10);
+    assert_eq!(server.score(id2), -5);
+
+    // Respawn id1
+    assert!(server.apply_respawn(addr1, id1));
+
+    // Score and roster must be preserved
+    assert_eq!(server.score(id1), 10);
+    assert_eq!(server.score(id2), -5);
+
+    let ServerMessage::Roster { players } = server.roster() else {
+        panic!("expected roster");
+    };
+    assert_eq!(players.len(), 2);
+    assert!(players.contains(&(id1, "scorer".to_string())));
+    assert!(players.contains(&(id2, "target".to_string())));
+}
+
+#[test]
+fn test_repeated_respawn_idempotency() {
+    let mut server = ServerState::new();
+    let addr = "127.0.0.1:45678".parse().unwrap();
+    let accepted = server.join(addr, "spammer".to_string());
+    let player_id = match accepted {
+        ServerMessage::Accepted { player_id, .. } => player_id,
+        _ => panic!("join failed"),
+    };
+
+    let spawn = server.maze().spawn();
+
+    for _ in 0..5 {
+        assert!(server.apply_respawn(addr, player_id));
+        assert_eq!(server.player_position(player_id).unwrap(), spawn);
+        assert_eq!(server.player_direction(player_id).unwrap(), 0.0);
+    }
+}
+
+#[test]
+fn test_respawn_clears_only_respawning_players_shots_preserving_other_players_shots() {
+    let mut server = ServerState::new();
+    let addr1 = "127.0.0.1:45678".parse().unwrap();
+    let addr2 = "127.0.0.1:45679".parse().unwrap();
+    let accepted1 = server.join(addr1, "shooter1".to_string());
+    let id1 = match accepted1 {
+        ServerMessage::Accepted { player_id, .. } => player_id,
+        _ => panic!("join failed"),
+    };
+    let accepted2 = server.join(addr2, "shooter2".to_string());
+    let id2 = match accepted2 {
+        ServerMessage::Accepted { player_id, .. } => player_id,
+        _ => panic!("join failed"),
+    };
+
+    server.set_player_position(id1, Position { x: 1.5, y: 1.5 });
+    server.set_player_direction(id1, 0.0);
+    server.set_player_position(id2, Position { x: 1.5, y: 3.5 });
+    server.set_player_direction(id2, 0.0);
+
+    // Both players fire shots down open corridors
+    assert!(server.apply_fire(addr1, id1, 1));
+    assert!(server.apply_fire(addr2, id2, 1));
+    assert_eq!(server.active_shots_count(), 2);
+
+    // Respawn player 1
+    assert!(server.apply_respawn(addr1, id1));
+
+    // Player 1's shot was cleared, player 2's shot is preserved!
+    assert_eq!(server.active_shots_count(), 1);
+    let remaining_shots = server.combat().active_shots();
+    assert_eq!(remaining_shots[0].shooter_id, id2);
+}
+

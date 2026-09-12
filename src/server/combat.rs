@@ -116,6 +116,11 @@ impl CombatManager {
         self.shots.clear();
     }
 
+    /// Drops in-flight shots belonging to a specific player upon respawn.
+    pub fn clear_player_shots(&mut self, player_id: u32) {
+        self.shots.retain(|shot| shot.shooter_id != player_id);
+    }
+
     pub fn remove_player(&mut self, player_id: u32) {
         self.last_fire_tick.remove(&player_id);
         self.hit_protection.remove(&player_id);

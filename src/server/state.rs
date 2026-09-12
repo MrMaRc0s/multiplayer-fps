@@ -268,7 +268,7 @@ impl ServerState {
         player.turn = 0;
         player.last_seen_tick = self.tick;
         player.last_input_sequence = None;
-        self.combat.clear_shots();
+        self.combat.clear_player_shots(player_id);
         true
     }
 
@@ -466,6 +466,16 @@ impl ServerState {
         if let Some(player) = self.players.values_mut().find(|p| p.id == player_id) {
             player.direction = direction;
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn combat(&self) -> &CombatManager {
+        &self.combat
+    }
+
+    #[allow(dead_code)]
+    pub fn active_shots_count(&self) -> usize {
+        self.combat.active_shots_count()
     }
 }
 
