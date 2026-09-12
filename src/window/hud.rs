@@ -429,6 +429,9 @@ pub const fn glyph_bitmap(c: u8) -> [u8; 5] {
         b',' => [0b000, 0b000, 0b000, 0b010, 0b100],
         b'!' => [0b010, 0b010, 0b010, 0b000, 0b010],
         b'?' => [0b111, 0b001, 0b010, 0b000, 0b010],
+        b'>' => [0b100, 0b010, 0b001, 0b010, 0b100],
+        b'<' => [0b001, 0b010, 0b100, 0b010, 0b001],
+        b'=' => [0b000, 0b111, 0b000, 0b111, 0b000],
 
         // Visible placeholder (never blank) so any other legal character
         // still renders instead of silently advancing the cursor.

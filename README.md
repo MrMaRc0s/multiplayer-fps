@@ -85,12 +85,17 @@ If the server is unreachable, the client displays a friendly error explaining th
 
 | Key / Input | Action |
 |-------------|--------|
-| `W` or `Up Arrow` | Move forward |
-| `S` or `Down Arrow` | Move backward |
+| `W` or `Up Arrow` | Move forward / Menu navigate up |
+| `S` or `Down Arrow` | Move backward / Menu navigate down |
 | `A` or `Left Arrow` | Turn left |
 | `D` or `Right Arrow` | Turn right |
-| `Space` or `Left Mouse Button` | Fire shot |
-| `Escape` | Disconnect and quit |
+| `Space` or `Left Mouse Button` | Fire shot / Menu activate option |
+| `Escape` | Toggle In-Game Pause Menu (options, resume, quit) |
+| `E` | Toggle Autonomous Enemies in maze ON / OFF |
+| `C` | Toggle Persistent Aiming Crosshair ON / OFF |
+| `R` | Retry / Respawn after being caught by an enemy |
+| `Return` / `Enter` | Select / Toggle highlighted option in Pause Menu |
+| `Q` | Quick quit from Pause Menu or Game Over screen |
 
 Opposing movement keys cancel out deterministically.
 
@@ -98,17 +103,35 @@ Opposing movement keys cancel out deterministically.
 
 ## Gameplay & Combat Rules
 
-- **Shooting**: Players fire straight-line projectiles traveling at high velocity (`25.0` tiles/s). Shots stop upon hitting a maze wall or opponent.
+- **Shooting**: Players fire straight-line projectiles traveling at high velocity (`25.0` tiles/s). Shots stop upon hitting a maze wall, opponent, or enemy.
 - **Authoritative Combat**: The server computes swept-segment raycasts to prevent tunneling through walls or opponents between ticks.
 - **Scoring**:
   - Hitting an opponent awards **+10 points** to the shooter.
   - The hit target is penalized **-5 points** (scores may become negative).
   - Scores persist across level transitions for the duration of the connection.
 - **Two-Second Hit Protection**:
-  - When hit, the target remains in the maze and receives exactly **2.0 seconds** (120 server ticks) of invulnerability.
+  - When hit by an opponent, the target remains in the maze and receives exactly **2.0 seconds** (120 server ticks) of invulnerability.
   - During protection, the player can move and navigate freely to escape, but cannot be hit again.
   - Protected players visually alternate/blink in the first-person view and minimap.
-  - There is no health, ammo reloading, or death/respawn mechanic, preserving original Maze War rules.
+  - Preserves original Maze War rules with no ammo reloading.
+- **Autonomous Enemies in the Maze**:
+  - Pressing `E` (or enabling in the Pause Menu) spawns autonomous hostile enemies roaming the maze corridors.
+  - **Corridor Navigation & AI**: Enemies use BFS pathfinding and direct line-of-sight tracking to hunt the player, with proper orthogonal wall sliding to prevent clipping.
+  - **Loss Condition ("You Lose")**: If an alive enemy touches the player, the game transitions to a `"YOU LOSE!"` state, halting movement and prompting the player to Retry (`R`), Disable Enemies (`E`), or open the Pause Menu (`Escape`).
+  - **Defeating Enemies & No Respawn**: Shooting an enemy with a straight projectile destroys them instantly (`check_shot_hit`), with bullet tracers stopping cleanly at the impact point. Dead enemies **never respawn back**—once all enemies are eliminated, a `"MAZE CLEARED! ALL ENEMIES DEFEATED"` victory banner is displayed and the maze remains clear.
+  - **Midgame Disabling**: Pressing `E` midgame instantly removes all enemies from both the 3D first-person view and the minimap, disabling the AI completely.
+  - **Minimap Visualization**: Enemies are tracked on the minimap as high-contrast orange/red diamond markers with yellow core pips.
+- **Persistent Aiming Crosshair**:
+  - An aiming crosshair is visible continuously at the center of the screen during gameplay to enhance aiming precision.
+  - Can be toggled ON or OFF at any time using the `C` keyboard shortcut or via the Pause Menu.
+- **In-Game Pause Menu (`Escape`)**:
+  - Pressing `Escape` opens an in-game pause modal card styled in retro phosphor aesthetics.
+  - Options include:
+    1. **`RESUME GAME`**: Resumes active gameplay (or press `Escape`).
+    2. **`CROSSHAIR: [ON] / [OFF]`**: Toggles persistent crosshair.
+    3. **`ENEMIES: [ON] / [OFF]`**: Toggles autonomous enemies.
+    4. **`RESET ENEMIES`**: Re-spawns current level enemies.
+    5. **`QUIT GAME`**: Disconnects and quits cleanly.
 
 ---
 
@@ -126,6 +149,7 @@ Dead-end counts are produced by `Maze::count_dead_ends` (interior floor/exit til
 
 - **Exit Progression**: Reaching the exit tile (`E`) immediately triggers an authoritative level transition (`1 -> 2 -> 3 -> 1`).
 - **Spawns**: Each maze defines multiple distinct spawn points (5 in Level 1, 6 in Level 2, 8 in Level 3) to prevent initial overlap.
+- **Enemy Level Scaling**: When enemy mode is enabled, enemies dynamically adapt to the active level with proportional counts and spawn placement.
 
 ---
 
@@ -133,11 +157,17 @@ Dead-end counts are produced by `Maze::count_dead_ends` (interior floor/exit til
 
 - **First-Person View**: Monochrome 2.5D DDA raycaster with distance shading and horizontal wall depth.
 - **Eyeball Sprites**: Other players render as floating eyeball sprites with accurate wall occlusion depth buffering.
-- **Minimap**: Full overhead map in the upper-left corner showing walls, exit tile, local player in green (`RGB(70, 220, 125)`), and opponents in red (`RGB(225, 73, 75)`).
+- **Enemy Sprites**: Autonomous enemies render as menacing crimson/amber shelled entities sorted by distance with wall occlusion.
+- **Minimap**: Full overhead map in the upper-left corner showing walls, exit tile, local player in green (`RGB(70, 220, 125)`), opponents in red (`RGB(225, 73, 75)`), and active enemies in orange/red diamond markers (`RGB(255, 120, 20)`).
+- **Persistent Crosshair**: High-visibility retro green aiming reticle at the center of the viewport with center pip and corner brackets.
 - **HUD & Scoreboard**:
   - Top-right panel displays real-time rolling `FPS` and current `LEVEL`.
   - Top-center panel displays the live scoreboard with usernames and signed scores, sorted descending by score with the local player highlighted.
   - Rendered with a zero-allocation 3×5 bitmap font, ensuring stable 60+ FPS performance (well above the 50 FPS audit requirement).
+- **Interactive Retro Dialogs**:
+  - Pause Menu modal with keyboard navigation (`Up`/`Down`/`W`/`S`/`Enter`/`Space`/`Escape`/`Q`).
+  - Game Over modal on enemy touch with instant Retry (`R`) and Disable (`E`).
+  - Congratulatory `"MAZE CLEARED!"` victory banner.
 
 ---
 
@@ -155,6 +185,7 @@ multiplayer-fps-1/
 │   │   ├── server.rs       # Server executable entry point
 │   │   └── client.rs       # Client CLI prompts and launcher
 │   ├── client.rs           # Client networking, connection retry, and snapshot handling
+│   ├── enemy.rs            # Autonomous enemy AI, BFS pathfinding, swept combat & collision
 │   ├── protocol.rs         # Binary packet encoding/decoding and validation
 │   ├── server.rs           # Server UDP loop, 60 Hz tick, and broadcast management
 │   ├── world.rs            # Maze layouts, tile queries, spawn positions, dead ends
@@ -163,8 +194,9 @@ multiplayer-fps-1/
 │   │   └── state.rs        # Authoritative movement, sliding, level progression, timeouts
 │   └── window/
 │       ├── hud.rs          # Rolling FPS counter, bitmap font, top-10 scoreboard
-│       ├── minimap.rs      # Top-down maze minimap with player indicators
-│       └── view.rs         # 2.5D raycaster, distance shading, eye sprites, hit effects
+│       ├── menu.rs         # In-game pause menu, game-over screen, and victory banners
+│       ├── minimap.rs      # Top-down maze minimap with player and enemy indicators
+│       └── view.rs         # 2.5D raycaster, distance shading, eye/enemy sprites, crosshair, effects
 ```
 
 ---

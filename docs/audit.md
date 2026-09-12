@@ -77,5 +77,5 @@ This file is deliberately excluded from Git. It is a working study guide, not pr
 2. Run `cargo clippy --all-targets -- -D warnings`.
 3. Start `cargo run --bin server`.
 4. Start `cargo run`, accept the default address, and choose a name.
-5. Check that the server logs the join and the client opens its SDL window. Press Escape to close it.
+5. Check that the server logs the join and the client opens its SDL window. Press Escape to open the Pause Menu and select Quit Game (or press Q) to close it.
 6. Stop the server and try the client again. It should explain how to start the server instead of printing a raw `ConnectionRefused` error.

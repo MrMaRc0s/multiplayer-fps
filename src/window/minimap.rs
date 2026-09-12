@@ -70,6 +70,9 @@ pub fn compute_layout(maze_width: usize, maze_height: usize) -> MinimapLayout {
     }
 }
 
+pub const ENEMY_MINIMAP_COLOR: Color = Color::RGB(255, 120, 20);
+pub const ENEMY_MINIMAP_CORE: Color = Color::RGB(255, 240, 60);
+
 #[allow(dead_code)]
 pub(super) fn draw(
     canvas: &mut Canvas<Window>,
@@ -77,7 +80,7 @@ pub(super) fn draw(
     own_player_id: u32,
     players: &[PlayerSnapshot],
 ) -> Result<(), String> {
-    draw_with_effects(canvas, maze, own_player_id, players, &[], None)
+    draw_with_effects(canvas, maze, own_player_id, players, &[], &[], None)
 }
 
 #[allow(dead_code)]
@@ -87,6 +90,7 @@ pub(super) fn draw_with_effects(
     own_player_id: u32,
     players: &[PlayerSnapshot],
     tracers: &[ShotTracer],
+    enemies: &[crate::enemy::Enemy],
     now: Option<Instant>,
 ) -> Result<(), String> {
     let layout = compute_layout(maze.width(), maze.height());
@@ -127,6 +131,11 @@ pub(super) fn draw_with_effects(
         }
     }
 
+    // Draw enemies with high-visibility markers
+    for enemy in enemies {
+        draw_enemy_marker(canvas, enemy, &layout, blink_phase)?;
+    }
+
     // Draw other players
     for player in players.iter().filter(|p| p.id != own_player_id) {
         draw_player(canvas, player, OTHER_PLAYER_COLOR, &layout, blink_phase)?;
@@ -136,6 +145,36 @@ pub(super) fn draw_with_effects(
     if let Some(player) = players.iter().find(|p| p.id == own_player_id) {
         draw_player(canvas, player, LOCAL_PLAYER_COLOR, &layout, blink_phase)?;
     }
+
+    Ok(())
+}
+
+pub fn draw_enemy_marker(
+    canvas: &mut Canvas<Window>,
+    enemy: &crate::enemy::Enemy,
+    layout: &MinimapLayout,
+    blink_phase: bool,
+) -> Result<(), String> {
+    if !enemy.alive {
+        return Ok(());
+    }
+
+    let center = player_screen_position(layout, enemy.position.x, enemy.position.y);
+    let size = (layout.player_size as i32 + 2).max(5);
+    let half = size / 2;
+
+    let outer_color = if blink_phase {
+        Color::RGB(255, 60, 40)
+    } else {
+        ENEMY_MINIMAP_COLOR
+    };
+
+    canvas.set_draw_color(outer_color);
+    canvas.fill_rect(Rect::new(center.x - half, center.y - 1, size as u32, 3))?;
+    canvas.fill_rect(Rect::new(center.x - 1, center.y - half, 3, size as u32))?;
+
+    canvas.set_draw_color(ENEMY_MINIMAP_CORE);
+    let _ = canvas.draw_point(center);
 
     Ok(())
 }
@@ -276,5 +315,17 @@ mod tests {
         assert!(l1.player_size >= l3.player_size);
         assert!(l1.player_size >= 4);
         assert!(l3.player_size >= 4);
+    }
+
+    #[test]
+    fn enemy_marker_positions_within_bounds() {
+        let layout = compute_layout(15, 11);
+        let pos = player_screen_position(&layout, 1.5, 1.5);
+        assert!(pos.x >= layout.origin_x);
+        assert!(pos.y >= layout.origin_y);
+        assert!(pos.x <= layout.origin_x + layout.map_width_px as i32);
+        assert!(pos.y <= layout.origin_y + layout.map_height_px as i32);
+        assert_eq!(ENEMY_MINIMAP_COLOR, Color::RGB(255, 120, 20));
+        assert_eq!(ENEMY_MINIMAP_CORE, Color::RGB(255, 240, 60));
     }
 }

@@ -105,6 +105,8 @@ pub struct CombatVisuals<'a> {
     pub hit_confirmation_until: Option<Instant>,
     pub damage_feedback_until: Option<Instant>,
     pub now: Option<Instant>,
+    pub enemies: &'a [crate::enemy::Enemy],
+    pub show_crosshair: bool,
 }
 
 #[allow(dead_code)]
@@ -203,10 +205,11 @@ pub fn draw_with_effects(
     let now = effects.now.unwrap_or_else(Instant::now);
     let blink_phase = should_blink(now);
 
-    draw_other_players(
+    draw_scene_sprites(
         canvas,
         player,
         players,
+        effects.enemies,
         wall_depth,
         projection_distance,
         width,
@@ -234,6 +237,10 @@ pub fn draw_with_effects(
         draw_damage_feedback(canvas, width, height)?;
     }
 
+    if effects.show_crosshair {
+        draw_persistent_crosshair(canvas, width, height)?;
+    }
+
     Ok(())
 }
 
@@ -244,26 +251,50 @@ pub struct SpriteProjection {
     pub size: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SceneEntity<'a> {
+    Player(&'a PlayerSnapshot),
+    Enemy(&'a crate::enemy::Enemy),
+}
+
 #[allow(clippy::too_many_arguments)]
-fn draw_other_players(
+pub fn draw_scene_sprites(
     canvas: &mut Canvas<Window>,
     observer: &PlayerSnapshot,
     players: &[PlayerSnapshot],
+    enemies: &[crate::enemy::Enemy],
     wall_depth: &[f32],
     projection_distance: f32,
     screen_width: u32,
     screen_height: u32,
     blink_phase: bool,
 ) -> Result<(), String> {
-    let mut visible_storage = [None; 64];
+    let mut visible_storage: [Option<(SceneEntity<'_>, SpriteProjection)>; 96] = [None; 96];
     let mut count = 0;
 
-    for player in players.iter().filter(|player| player.id != observer.id) {
+    for player in players.iter().filter(|p| p.id != observer.id) {
         if let Some(projection) =
             project_player(observer, player, projection_distance, screen_width)
             && count < visible_storage.len()
         {
-            visible_storage[count] = Some((player, projection));
+            visible_storage[count] = Some((SceneEntity::Player(player), projection));
+            count += 1;
+        }
+    }
+
+    for enemy in enemies.iter().filter(|e| e.alive) {
+        if let Some(projection) = project_entity(
+            observer.x,
+            observer.y,
+            observer.direction,
+            enemy.position.x,
+            enemy.position.y,
+            projection_distance,
+            screen_width,
+            0.7,
+        ) && count < visible_storage.len()
+        {
+            visible_storage[count] = Some((SceneEntity::Enemy(enemy), projection));
             count += 1;
         }
     }
@@ -276,29 +307,71 @@ fn draw_other_players(
     });
 
     for item in visible.iter().flatten() {
-        let (player, projection) = *item;
-        draw_eye_sprite(
-            canvas,
-            player,
-            projection,
-            wall_depth,
-            screen_height,
-            blink_phase,
-        )?;
+        match item.0 {
+            SceneEntity::Player(player) => {
+                draw_eye_sprite(
+                    canvas,
+                    player,
+                    item.1,
+                    wall_depth,
+                    screen_height,
+                    blink_phase,
+                )?;
+            }
+            SceneEntity::Enemy(enemy) => {
+                draw_enemy_sprite(
+                    canvas,
+                    enemy,
+                    item.1,
+                    wall_depth,
+                    screen_height,
+                    blink_phase,
+                )?;
+            }
+        }
     }
     Ok(())
 }
 
-pub fn project_player(
+#[allow(clippy::too_many_arguments)]
+pub fn draw_other_players(
+    canvas: &mut Canvas<Window>,
     observer: &PlayerSnapshot,
-    target: &PlayerSnapshot,
+    players: &[PlayerSnapshot],
+    wall_depth: &[f32],
     projection_distance: f32,
     screen_width: u32,
+    screen_height: u32,
+    blink_phase: bool,
+) -> Result<(), String> {
+    draw_scene_sprites(
+        canvas,
+        observer,
+        players,
+        &[],
+        wall_depth,
+        projection_distance,
+        screen_width,
+        screen_height,
+        blink_phase,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn project_entity(
+    observer_x: f32,
+    observer_y: f32,
+    observer_dir: f32,
+    target_x: f32,
+    target_y: f32,
+    projection_distance: f32,
+    screen_width: u32,
+    scale: f32,
 ) -> Option<SpriteProjection> {
-    let difference_x = target.x - observer.x;
-    let difference_y = target.y - observer.y;
-    let forward_x = observer.direction.cos();
-    let forward_y = observer.direction.sin();
+    let difference_x = target_x - observer_x;
+    let difference_y = target_y - observer_y;
+    let forward_x = observer_dir.cos();
+    let forward_y = observer_dir.sin();
     let depth = difference_x * forward_x + difference_y * forward_y;
     if depth <= NEAR_PLANE {
         return None;
@@ -306,7 +379,7 @@ pub fn project_player(
 
     let sideways = -difference_x * forward_y + difference_y * forward_x;
     let center_x = screen_width as f32 / 2.0 + sideways / depth * projection_distance;
-    let size = projection_distance / depth * 0.7;
+    let size = projection_distance / depth * scale;
     if center_x + size / 2.0 < 0.0 || center_x - size / 2.0 >= screen_width as f32 {
         return None;
     }
@@ -316,6 +389,97 @@ pub fn project_player(
         center_x,
         size,
     })
+}
+
+pub fn project_player(
+    observer: &PlayerSnapshot,
+    target: &PlayerSnapshot,
+    projection_distance: f32,
+    screen_width: u32,
+) -> Option<SpriteProjection> {
+    project_entity(
+        observer.x,
+        observer.y,
+        observer.direction,
+        target.x,
+        target.y,
+        projection_distance,
+        screen_width,
+        0.7,
+    )
+}
+
+pub fn draw_enemy_sprite(
+    canvas: &mut Canvas<Window>,
+    enemy: &crate::enemy::Enemy,
+    projection: SpriteProjection,
+    wall_depth: &[f32],
+    screen_height: u32,
+    blink_phase: bool,
+) -> Result<(), String> {
+    if !enemy.alive {
+        return Ok(());
+    }
+
+    let half_width = projection.size / 2.0;
+    let left = (projection.center_x - half_width).floor() as i32;
+    let right = (projection.center_x + half_width).ceil() as i32;
+    let center_y = screen_height as f32 / 2.0;
+
+    for screen_x in (left..=right).step_by(COLUMN_WIDTH) {
+        if screen_x < 0 || screen_x as usize >= wall_depth.len() {
+            continue;
+        }
+        if projection.depth >= wall_depth[screen_x as usize] {
+            continue;
+        }
+
+        let normalized_x = (screen_x as f32 - projection.center_x) / half_width;
+        let abs_x = normalized_x.abs();
+
+        let body_half_height = (1.0 - abs_x * 0.8).max(0.0) * projection.size * 0.35;
+        if body_half_height < 1.0 {
+            continue;
+        }
+
+        let shell_color = if blink_phase {
+            Color::RGB(240, 40, 40)
+        } else {
+            Color::RGB(200, 20, 20)
+        };
+
+        canvas.set_draw_color(shell_color);
+        canvas.fill_rect(Rect::new(
+            screen_x,
+            (center_y - body_half_height).round() as i32,
+            COLUMN_WIDTH as u32,
+            (body_half_height * 2.0).round() as u32,
+        ))?;
+
+        if abs_x < 0.5 {
+            let core_height = body_half_height * 0.65;
+            canvas.set_draw_color(Color::RGB(255, 180, 20));
+            canvas.fill_rect(Rect::new(
+                screen_x,
+                (center_y - core_height).round() as i32,
+                COLUMN_WIDTH as u32,
+                (core_height * 2.0).round() as u32,
+            ))?;
+        }
+
+        if abs_x < 0.2 {
+            let pupil_height = body_half_height * 0.35;
+            canvas.set_draw_color(Color::RGB(10, 0, 0));
+            canvas.fill_rect(Rect::new(
+                screen_x,
+                (center_y - pupil_height).round() as i32,
+                COLUMN_WIDTH as u32,
+                (pupil_height * 2.0).round() as u32,
+            ))?;
+        }
+    }
+
+    Ok(())
 }
 
 fn draw_eye_sprite(
@@ -657,6 +821,30 @@ fn draw_hit_confirmation(
     Ok(())
 }
 
+pub fn draw_persistent_crosshair(
+    canvas: &mut Canvas<Window>,
+    screen_width: u32,
+    screen_height: u32,
+) -> Result<(), String> {
+    let cx = (screen_width / 2) as i32;
+    let cy = (screen_height / 2) as i32;
+
+    canvas.set_draw_color(Color::RGB(180, 240, 180));
+    canvas.draw_line(Point::new(cx - 10, cy), Point::new(cx - 3, cy))?;
+    canvas.draw_line(Point::new(cx + 3, cy), Point::new(cx + 10, cy))?;
+    canvas.draw_line(Point::new(cx, cy - 10), Point::new(cx, cy - 3))?;
+    canvas.draw_line(Point::new(cx, cy + 3), Point::new(cx, cy + 10))?;
+    canvas.draw_point(Point::new(cx, cy))?;
+
+    canvas.set_draw_color(Color::RGB(100, 180, 120));
+    canvas.draw_line(Point::new(cx - 6, cy - 6), Point::new(cx - 4, cy - 6))?;
+    canvas.draw_line(Point::new(cx + 4, cy - 6), Point::new(cx + 6, cy - 6))?;
+    canvas.draw_line(Point::new(cx - 6, cy + 6), Point::new(cx - 4, cy + 6))?;
+    canvas.draw_line(Point::new(cx + 4, cy + 6), Point::new(cx + 6, cy + 6))?;
+
+    Ok(())
+}
+
 fn draw_damage_feedback(
     canvas: &mut Canvas<Window>,
     screen_width: u32,
@@ -942,10 +1130,13 @@ mod tests {
             hit_confirmation_until: Some(active_until),
             damage_feedback_until: Some(expired),
             now: Some(now),
+            enemies: &[],
+            show_crosshair: false,
         };
 
         assert!(visuals.is_hit_confirmed(now));
         assert!(!visuals.is_damage_active(now));
+        assert!(!visuals.show_crosshair);
         assert!(CombatVisuals::is_effect_active_from_elapsed(
             Duration::from_millis(100),
             HIT_CONFIRMATION_LIFETIME
@@ -1003,5 +1194,26 @@ mod tests {
             let proj = project_player(&observer, player, 800.0, 800);
             assert!(proj.is_some());
         }
+    }
+
+    #[test]
+    fn test_project_entity_and_enemy_projection() {
+        let proj = project_entity(1.0, 1.0, 0.0, 4.0, 1.0, 800.0, 960, 0.7);
+        assert!(proj.is_some());
+        let p = proj.unwrap();
+        assert_eq!(p.depth, 3.0);
+        assert!((p.center_x - 480.0).abs() < 0.001);
+
+        // Behind camera
+        let behind = project_entity(1.0, 1.0, 0.0, 0.0, 1.0, 800.0, 960, 0.7);
+        assert!(behind.is_none());
+    }
+
+    #[test]
+    fn test_crosshair_toggle_state() {
+        let mut visuals = CombatVisuals::default();
+        assert!(!visuals.show_crosshair);
+        visuals.show_crosshair = true;
+        assert!(visuals.show_crosshair);
     }
 }

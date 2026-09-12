@@ -522,3 +522,30 @@ cargo test audit_check_firing_visuals_projectile_and_muzzle_flash_rendered
 6. **Demonstrate Frame Rate**:
    - Look at the top-right HUD: `FPS: 60  LEVEL: <n>`.
    - Frame rate remains stably at 60 FPS under all movement and shooting actions.
+
+### Step 4: Autonomous Maze Enemies, Crosshair & Pause Menu Demonstration
+1. **Persistent Aiming Crosshair (`C`)**:
+   - Notice the green aiming crosshair in the center of the screen during gameplay.
+   - Press `C`: crosshair toggles OFF (returns to shooting-only reticle).
+   - Press `C` again: persistent crosshair turns back ON.
+2. **In-Game Pause Menu (`Escape`)**:
+   - Press `Escape`: the game pauses and the retro phosphor-green Pause Menu appears.
+   - Use `Up`/`Down` or `W`/`S` to navigate between options.
+   - Press `Enter` or `Space` to toggle `CROSSHAIR` or `ENEMIES` settings.
+   - Select `RESUME GAME` or press `Escape` again to resume gameplay.
+3. **Autonomous Enemies in the Maze (`E`)**:
+   - Press `E` (or enable in Pause Menu): hostile autonomous enemies spawn in the corridors.
+   - Look at the minimap: enemies appear as high-visibility orange/red diamond markers with yellow cores.
+   - Look into the 3D first-person view: enemies render as distance-scaled crimson/amber entities properly occluded behind walls.
+   - Enemies navigate corridors towards the player using BFS pathfinding and wall sliding.
+4. **Defeating Enemies & Swept Combat**:
+   - Aim at an enemy with your crosshair and fire (`Space` or Left Click).
+   - The shot tracer hits the enemy, the enemy disappears immediately, and **never respawns back**.
+   - Defeat all enemies in the maze: a `"MAZE CLEARED! ALL ENEMIES DEFEATED"` victory banner displays at the top of the screen.
+5. **Loss Condition ("You Lose") & Retry (`R`)**:
+   - Allow an enemy to touch your player: the game transitions to `"YOU LOSE! AN ENEMY CAUGHT YOU"`.
+   - Press `R` to retry: your player respawns at the starting point and enemies reset.
+   - Alternatively, press `E` to disable enemies and continue immediately.
+6. **Midgame Disabling**:
+   - With enemies active, press `E` in midgame: all enemies immediately disappear from the screen and minimap, and enemy simulation is completely disabled.
+
